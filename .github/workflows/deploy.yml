@@ -29,8 +29,8 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Scrape latest odds + fixtures
-        run: python3 scrape_snapshot.py
+      - name: Scrape latest odds + fixtures (best-effort; Sportsbet may block CI IPs)
+        run: python3 scrape_snapshot.py || echo "scrape failed (likely Sportsbet IP block) — deploying last committed snapshot"
 
       - name: Commit snapshot (persist state for next run's arrows)
         run: |
