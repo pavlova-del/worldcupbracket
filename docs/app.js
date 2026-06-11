@@ -319,13 +319,6 @@ function initTabs() {
     document.querySelectorAll(".otab").forEach(b => b.classList.toggle("active", b === btn));
     renderOdds();
   });
-  // play button -> game modal (iframe lazy-loaded; cleared on close to stop audio)
-  const modal = $("#gameModal"), frame = $("#gameFrame");
-  const closeGame = () => { modal.classList.add("hidden"); frame.src = "about:blank"; };
-  $("#playBtn").onclick = () => { frame.src = "game.html"; modal.classList.remove("hidden"); };
-  $("#gameClose").onclick = closeGame;
-  modal.addEventListener("click", e => { if (e.target === modal) closeGame(); });
-  document.addEventListener("keydown", e => { if (e.key === "Escape" && !modal.classList.contains("hidden")) closeGame(); });
 }
 
 function tick() {
