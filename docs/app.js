@@ -284,9 +284,7 @@ function renderNextMatch() {
 
 function renderStatus() {
   if (!latest) return;
-  const ago = Math.max(0, Math.round((Date.now() / 1000 - latest.timestamp) / 60));
-  $("#updated").textContent = ago < 1 ? "updated just now" : `updated ${ago} min ago`;
-  $("#legend").textContent = prev ? "▲ shortening · ▼ drifting (vs last refresh)" : "first snapshot — no movement yet";
+  $("#legend").textContent = prev ? "▲ shortening · ▼ drifting (vs last update)" : "no movement yet";
 }
 
 function renderAll() {

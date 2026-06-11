@@ -2,7 +2,7 @@ name: Scrape odds & deploy Pages
 
 on:
   schedule:
-    - cron: "*/15 * * * *"   # every 15 min (GitHub may delay)
+    - cron: "0 */2 * * *"   # every 2 hours (GitHub may delay)
   push:
     branches: [main]
   workflow_dispatch: {}
