@@ -1,38 +1,34 @@
-name: Scrape odds & deploy Pages
+name: Scrape odds (best-effort)
+
+# Pages itself is served via "deploy from branch" (main /docs) — no deploy step
+# needed here. Sportsbet blocks GitHub's cloud IPs (403), so this scrape usually
+# can't fetch from CI; the live odds are refreshed by the LOCAL updater that
+# pushes docs/data/*.json (see update_odds.sh). This job is kept best-effort in
+# case the block is ever lifted.
 
 on:
   schedule:
-    - cron: "0 */2 * * *"   # every 2 hours (GitHub may delay)
-  push:
-    branches: [main]
+    - cron: "0 */2 * * *"   # every 2 hours
   workflow_dispatch: {}
 
 permissions:
-  contents: write   # commit refreshed snapshots (persists prev->latest state)
-  pages: write
-  id-token: write
+  contents: write
 
 concurrency:
-  group: pages
+  group: scrape
   cancel-in-progress: false
 
 jobs:
-  run:
+  scrape:
     runs-on: ubuntu-latest
-    environment:
-      name: github-pages
-      url: ${{ steps.deploy.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-
-      - name: Scrape latest odds + fixtures (best-effort; Sportsbet may block CI IPs)
-        run: python3 scrape_snapshot.py || echo "scrape failed (likely Sportsbet IP block) — deploying last committed snapshot"
-
-      - name: Commit snapshot (persist state for next run's arrows)
+      - name: Scrape (Sportsbet may block CI IPs)
+        run: python3 scrape_snapshot.py || echo "scrape failed (likely Sportsbet IP block)"
+      - name: Commit if changed
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
@@ -43,14 +39,3 @@ jobs:
             git commit -m "odds snapshot $(date -u +%Y-%m-%dT%H:%MZ)"
             git push
           fi
-
-      - uses: actions/configure-pages@v5
-        with:
-          enablement: true
-
-      - uses: actions/upload-pages-artifact@v3
-        with:
-          path: docs
-
-      - id: deploy
-        uses: actions/deploy-pages@v4
