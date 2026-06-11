@@ -12,6 +12,7 @@
       <h1>WORLD CUP 2026</h1>
       <span class="tagline">Sweepstake tracker · live bracket &amp; odds</span>
     </div>
+    <button id="playBtn" class="playbtn" title="Play the penalty shootout mini-game">🎮 Play</button>
   </header>
 
   <nav id="ownerbar" aria-label="Filter by player"></nav>
@@ -48,6 +49,11 @@
       </table>
     </aside>
   </main>
+
+  <div id="gameModal" class="gamemodal hidden">
+    <button id="gameClose" title="Close game">✕ Close</button>
+    <iframe id="gameFrame" title="Penalty Shootout mini-game" allow="autoplay"></iframe>
+  </div>
 
   <script src="app.js"></script>
 </body>
