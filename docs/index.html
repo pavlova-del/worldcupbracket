@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>World Cup 2026 · Sweepstake Tracker</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header id="topbar">
+    <div class="brand">
+      <h1>WORLD CUP 2026</h1>
+      <span class="tagline">Sweepstake tracker · live bracket &amp; odds</span>
+    </div>
+    <div class="status">
+      <div class="updated" id="updated">loading…</div>
+    </div>
+  </header>
+
+  <nav id="ownerbar" aria-label="Filter by player"></nav>
+
+  <div id="nextmatch" class="nextbox">Loading next match…</div>
+
+  <main>
+    <section id="bracketPanel" class="panel">
+      <div class="tabs">
+        <button class="tab active" data-view="groups">Groups</button>
+        <button class="tab" data-view="knockout">Knockout</button>
+        <button class="tab" data-view="schedule">Schedule</button>
+        <div class="legend" id="legend"></div>
+      </div>
+      <div id="groupsView" class="view"></div>
+      <div id="knockoutView" class="view hidden"></div>
+      <div id="scheduleView" class="view hidden"></div>
+    </section>
+
+    <aside id="oddsPanel" class="panel">
+      <div class="otabs">
+        <button class="otab active" data-otab="teams">Teams</button>
+        <button class="otab" data-otab="players">Player slips</button>
+        <span class="otitle">live · to win the cup</span>
+      </div>
+      <div id="movers" class="movers"></div>
+      <table id="teamTable" class="otable">
+        <thead><tr><th>Seed</th><th>Team</th><th>Win</th><th>±</th></tr></thead>
+        <tbody></tbody>
+      </table>
+      <table id="playerTable" class="otable hidden">
+        <thead><tr><th>#</th><th>Player slip</th><th>Win</th><th>±</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </aside>
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>
