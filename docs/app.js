@@ -337,17 +337,24 @@ function applyDeepLink() {
   (q.get("owner") || "").split(",").map(s => s.trim()).filter(Boolean).forEach(o => selectedOwners.add(o));
 }
 
-(async function init() {
-  initTabs();
-  applyDeepLink();
-  try {
-    T = await getJSON("data/tournament.json");
-    [...selectedOwners].forEach(o => { if (!(o in T.owners)) selectedOwners.delete(o); });
-    await refresh();
-    setView();
-    document.querySelectorAll(".otab").forEach(b => b.classList.toggle("active", b.dataset.otab === oddsTab));
-    setInterval(tick, 1000);
-  } catch (e) {
-    document.querySelector("main").innerHTML = `<p style="padding:20px;color:#ff6b6b">Failed to load data: ${e.message}</p>`;
-  }
+async function load() {
+  T = await getJSON("data/tournament.json");
+  [...selectedOwners].forEach(o => { if (!(o in T.owners)) selectedOwners.delete(o); });
+  await refresh();
+  setView();
+  document.querySelectorAll(".otab").forEach(b => b.classList.toggle("active", b.dataset.otab === oddsTab));
+}
+
+(function init() {
+  try { initTabs(); applyDeepLink(); } catch (e) { /* keep going even if a control is missing */ }
+  let started = false;
+  const start = () => load()
+    .then(() => { if (!started) { started = true; setInterval(tick, 1000); } })
+    .catch(err => {
+      console.error(err);
+      const n = document.getElementById("nextmatch");
+      if (n) n.textContent = "Couldn't load data — retrying…";
+      setTimeout(start, 4000);   // transient failures (deploy races, flaky net) self-heal
+    });
+  start();
 })();
