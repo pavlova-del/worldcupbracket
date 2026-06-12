@@ -45,6 +45,26 @@ body {
 .ltable tr.out { opacity:.45; }
 .ltable tr.out .lt-nm { text-decoration:line-through; }
 
+/* ---- info button + glossary modal ---- */
+.infobtn {
+  margin-left:auto; flex:none; width:30px; height:30px; border-radius:50%;
+  border:1.5px solid var(--line); background:var(--panel2); color:var(--dim);
+  font-family:Georgia,"Times New Roman",serif; font-style:italic; font-weight:700; font-size:16px;
+  cursor:pointer; line-height:1;
+}
+.infobtn:hover { color:var(--ink); border-color:var(--gold); }
+.infomodal { position:fixed; inset:0; z-index:60; display:flex; align-items:center; justify-content:center; background:rgba(3,9,6,.82); padding:16px; }
+.infomodal.hidden { display:none; }
+.infocard { position:relative; width:100%; max-width:470px; max-height:85vh; overflow:auto;
+  background:var(--panel); border:1px solid var(--line); border-radius:14px; padding:20px 22px; }
+.infocard h2 { margin:0 0 10px; font-size:18px; color:var(--gold); }
+.infocard dl { margin:0; }
+.infocard dt { font-weight:800; margin-top:13px; font-size:14px; }
+.infocard dd { margin:3px 0 0; color:var(--dim); font-size:13.5px; line-height:1.45; }
+.infocard dd b { color:var(--ink); }
+.infoclose { position:absolute; top:11px; right:13px; background:none; border:none; color:var(--dim); font-size:16px; cursor:pointer; }
+.infoclose:hover { color:var(--ink); }
+
 /* ---- next match box ---- */
 .nextbox {
   display:flex; flex-wrap:wrap; align-items:center; gap:6px 18px;
