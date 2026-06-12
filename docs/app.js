@@ -13,6 +13,7 @@ let probLatest = {}, probPrev = {};
 let selectedOwners = new Set();
 let view = "groups";
 let oddsTab = "teams";
+let schedMode = "fixtures";
 let nextRefreshAt = 0;
 let shownTeam = {}, shownPlayer = {};   // last-rendered values, to flash on change
 let fixtures = [];
@@ -241,36 +242,54 @@ function renderKnockout() {
 /* ---------- schedule / calendar ---------- */
 const DAY_FMT = new Intl.DateTimeFormat("en-AU", { timeZone: "Australia/Brisbane", weekday: "long", day: "numeric", month: "long" });
 const TIME_FMT = new Intl.DateTimeFormat("en-AU", { timeZone: "Australia/Brisbane", hour: "numeric", minute: "2-digit", hour12: true });
+function schedRow(f, now, nextTs) {
+  const grp = T.teams[f.a]?.group;
+  const m = getMatch(f.a, f.b);
+  const played = m && m.state !== "pre";
+  const live = m && m.state === "in";
+  let sA = "", sB = "";
+  if (played) { const flip = m.a !== f.a; sA = flip ? m.sb : m.sa; sB = flip ? m.sa : m.sb; }
+  const winA = played && sA > sB, winB = played && sB > sA;
+  const row = el("div", "schedrow" + (live ? " live" : "") +
+    (!played && f.ts === nextTs ? " next" : "") + (!played && !live && f.ts < now ? " past" : ""));
+  row.dataset.owned = (selectedOwners.size && (owned(f.a) || owned(f.b))) ? 1 : 0;
+  const timeCell = live
+    ? `<span class="schedtime"><span class="livebadge">LIVE</span></span>`
+    : `<span class="schedtime">${TIME_FMT.format(new Date(f.ts * 1000))}</span>`;
+  const mid = played ? `<span class="score">${sA}<span class="dash">–</span>${sB}</span>` : `<span class="vs">v</span>`;
+  row.innerHTML = timeCell +
+    `<span class="schedteam${winA ? " win" : ""}">${seedBadge(f.a)}<img src="${FLAG(T.teams[f.a]?.iso)}">${f.a}${ownerTag(f.a)}</span>` +
+    mid +
+    `<span class="schedteam${winB ? " win" : ""}">${seedBadge(f.b)}<img src="${FLAG(T.teams[f.b]?.iso)}">${f.b}${ownerTag(f.b)}</span>` +
+    `<span class="schedgrp">${grp ? "Grp " + grp : ""}</span>`;
+  return row;
+}
+
 function renderSchedule() {
   const v = $("#scheduleView"); if (!v) return; v.innerHTML = "";
-  if (!fixtures.length) { v.innerHTML = "<p class='emptynote'>Fixtures unavailable.</p>"; return; }
+  const tabs = el("div", "schedtabs");
+  [["fixtures", "Fixtures"], ["results", "Results"]].forEach(([mode, label]) => {
+    const b = el("button", "schedtab" + (schedMode === mode ? " active" : ""), label);
+    b.onclick = () => { schedMode = mode; renderSchedule(); };
+    tabs.appendChild(b);
+  });
+  v.appendChild(tabs);
+
+  if (!fixtures.length) { v.appendChild(el("p", "emptynote", "Fixtures unavailable.")); return; }
   const now = Date.now() / 1000;
   const nextTs = (fixtures.find(f => f.ts > now) || {}).ts;
+
+  let list = fixtures.slice();
+  if (schedMode === "results") {
+    list = list.filter(f => { const m = getMatch(f.a, f.b); return m && m.state !== "pre"; })
+               .sort((a, b) => b.ts - a.ts);   // most recent first
+    if (!list.length) { v.appendChild(el("p", "emptynote", "No games played yet — check back after the first kick-off.")); return; }
+  }
   let lastDay = null;
-  fixtures.forEach(f => {
+  list.forEach(f => {
     const day = DAY_FMT.format(new Date(f.ts * 1000));
     if (day !== lastDay) { v.appendChild(el("div", "schedday", day)); lastDay = day; }
-    const grp = T.teams[f.a]?.group;
-    const m = getMatch(f.a, f.b);
-    const played = m && m.state !== "pre";
-    const live = m && m.state === "in";
-    // results store score by (a,b) sorted — figure out which side is f.a
-    let sA = "", sB = "";
-    if (played) { const flip = m.a !== f.a; sA = flip ? m.sb : m.sa; sB = flip ? m.sa : m.sb; }
-    const winA = played && sA > sB, winB = played && sB > sA;
-    const row = el("div", "schedrow" + (live ? " live" : "") +
-      (!played && f.ts === nextTs ? " next" : "") + (!played && !live && f.ts < now ? " past" : ""));
-    row.dataset.owned = (selectedOwners.size && (owned(f.a) || owned(f.b))) ? 1 : 0;
-    const timeCell = live
-      ? `<span class="schedtime"><span class="livebadge">LIVE</span></span>`
-      : `<span class="schedtime">${TIME_FMT.format(new Date(f.ts * 1000))}</span>`;
-    const mid = played ? `<span class="score">${sA}<span class="dash">–</span>${sB}</span>` : `<span class="vs">v</span>`;
-    row.innerHTML = timeCell +
-      `<span class="schedteam${winA ? " win" : ""}">${seedBadge(f.a)}<img src="${FLAG(T.teams[f.a]?.iso)}">${f.a}${ownerTag(f.a)}</span>` +
-      mid +
-      `<span class="schedteam${winB ? " win" : ""}">${seedBadge(f.b)}<img src="${FLAG(T.teams[f.b]?.iso)}">${f.b}${ownerTag(f.b)}</span>` +
-      `<span class="schedgrp">${grp ? "Grp " + grp : ""}</span>`;
-    v.appendChild(row);
+    v.appendChild(schedRow(f, now, nextTs));
   });
 }
 
