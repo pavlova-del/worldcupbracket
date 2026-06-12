@@ -26,13 +26,15 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Scrape (Sportsbet may block CI IPs)
-        run: python3 scrape_snapshot.py || echo "scrape failed (likely Sportsbet IP block)"
+      - name: Scrape odds (Sportsbet may block CI IPs)
+        run: python3 scrape_snapshot.py || echo "odds scrape failed (likely Sportsbet IP block)"
+      - name: Scrape results (ESPN — usually works from CI)
+        run: python3 scrape_results.py || echo "results scrape failed"
       - name: Commit if changed
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add docs/data/odds_latest.json docs/data/odds_prev.json docs/data/fixtures.json
+          git add docs/data/odds_latest.json docs/data/odds_prev.json docs/data/fixtures.json docs/data/results.json
           if git diff --staged --quiet; then
             echo "No change."
           else

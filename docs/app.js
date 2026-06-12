@@ -16,6 +16,8 @@ let oddsTab = "teams";
 let nextRefreshAt = 0;
 let shownTeam = {}, shownPlayer = {};   // last-rendered values, to flash on change
 let fixtures = [];
+let results = null, standing = {}, matchScore = {};   // ESPN standings + scores
+const pairKey = (a, b) => [a, b].sort().join("|");
 let seed = {};                          // team -> overall seed (1 = strongest by odds)
 const AEST = new Intl.DateTimeFormat("en-AU", { timeZone: "Australia/Brisbane", weekday: "short", day: "numeric", month: "short", hour: "numeric", minute: "2-digit", hour12: true });
 
@@ -55,6 +57,9 @@ const seedBadge = team => seed[team] ? `<span class="seed" title="Seed ${seed[te
 
 /* ---------- standings + knockout projection ---------- */
 function standings(letter) {
+  // real group order once results exist; otherwise fall back to odds order
+  if (results && results.groups && results.groups[letter])
+    return results.groups[letter].map(r => r.team);
   return [...T.groups[letter]].sort((a, b) => (probLatest[b] ?? 0) - (probLatest[a] ?? 0));
 }
 
@@ -80,13 +85,15 @@ function ownerTag(team) {
 
 /* ---------- groups ---------- */
 function teamRow(team) {
-  const od = ownerDot(team), mv = teamMove(team);
-  const row = el("div", "trow");
+  const od = ownerDot(team), mv = teamMove(team), s = standing[team];
+  const row = el("div", "trow" + (s && s.out ? " out" : ""));
   row.dataset.owned = owned(team);
+  const rec = s && s.P > 0
+    ? `<span class="rec"><b>${s.Pts}</b> pt · ${s.W}-${s.D}-${s.L} · GD ${s.GD > 0 ? "+" + s.GD : s.GD}</span>` : "";
   row.innerHTML =
     `<img src="${FLAG(T.teams[team].iso)}" alt="">` +
-    `<div><div class="tname">${seedBadge(team)}${team}</div>` +
-    `<div class="owner"><span class="dot" style="background:${od.color}"></span>${od.name}</div></div>` +
+    `<div><div class="tname">${seedBadge(team)}${team}${s && s.out ? ' <span class="outtag">OUT</span>' : ""}</div>` +
+    `<div class="owner"><span class="dot" style="background:${od.color}"></span>${od.name}${rec}</div></div>` +
     `<span class="pct">${pct(team)}</span>` +
     `<span class="delta ${mv.cls}">${mv.txt}</span>`;
   return row;
@@ -193,13 +200,24 @@ function renderSchedule() {
     const day = DAY_FMT.format(new Date(f.ts * 1000));
     if (day !== lastDay) { v.appendChild(el("div", "schedday", day)); lastDay = day; }
     const grp = T.teams[f.a]?.group;
-    const row = el("div", "schedrow" + (f.ts < now ? " past" : "") + (f.ts === nextTs ? " next" : ""));
+    const m = matchScore[pairKey(f.a, f.b)];
+    const played = m && m.state !== "pre";
+    const live = m && m.state === "in";
+    // results store score by (a,b) sorted — figure out which side is f.a
+    let sA = "", sB = "";
+    if (played) { const flip = m.a !== f.a; sA = flip ? m.sb : m.sa; sB = flip ? m.sa : m.sb; }
+    const winA = played && sA > sB, winB = played && sB > sA;
+    const row = el("div", "schedrow" + (live ? " live" : "") +
+      (!played && f.ts === nextTs ? " next" : "") + (!played && !live && f.ts < now ? " past" : ""));
     row.dataset.owned = (selectedOwners.size && (owned(f.a) || owned(f.b))) ? 1 : 0;
-    row.innerHTML =
-      `<span class="schedtime">${TIME_FMT.format(new Date(f.ts * 1000))}</span>` +
-      `<span class="schedteam">${seedBadge(f.a)}<img src="${FLAG(T.teams[f.a]?.iso)}">${f.a}${ownerTag(f.a)}</span>` +
-      `<span class="vs">v</span>` +
-      `<span class="schedteam">${seedBadge(f.b)}<img src="${FLAG(T.teams[f.b]?.iso)}">${f.b}${ownerTag(f.b)}</span>` +
+    const timeCell = live
+      ? `<span class="schedtime"><span class="livebadge">LIVE</span></span>`
+      : `<span class="schedtime">${TIME_FMT.format(new Date(f.ts * 1000))}</span>`;
+    const mid = played ? `<span class="score">${sA}<span class="dash">–</span>${sB}</span>` : `<span class="vs">v</span>`;
+    row.innerHTML = timeCell +
+      `<span class="schedteam${winA ? " win" : ""}">${seedBadge(f.a)}<img src="${FLAG(T.teams[f.a]?.iso)}">${f.a}${ownerTag(f.a)}</span>` +
+      mid +
+      `<span class="schedteam${winB ? " win" : ""}">${seedBadge(f.b)}<img src="${FLAG(T.teams[f.b]?.iso)}">${f.b}${ownerTag(f.b)}</span>` +
       `<span class="schedgrp">${grp ? "Grp " + grp : ""}</span>`;
     v.appendChild(row);
   });
@@ -213,7 +231,8 @@ function renderOdds() {
   teams.forEach((t, i) => {
     const od = ownerDot(t), mv = teamMove(t), p = probLatest[t] ?? 0;
     const tr = el("tr"); tr.dataset.owned = owned(t);
-    if (shownTeam[t] != null && Math.abs(p - shownTeam[t]) > 1e-6) tr.className = "flash";
+    if (standing[t] && standing[t].out) tr.classList.add("out");
+    if (shownTeam[t] != null && Math.abs(p - shownTeam[t]) > 1e-6) tr.classList.add("flash");
     shownTeam[t] = p;
     tr.innerHTML = `<td class="rank">${i + 1}</td>` +
       `<td><span class="team"><img src="${FLAG(T.teams[t].iso)}"><span class="odot" style="background:${od.color}" title="${od.name}"></span>${t}</span></td>` +
@@ -271,6 +290,18 @@ function nmTeam(name) {
 }
 function renderNextMatch() {
   const box = $("#nextmatch"); if (!box) return;
+  // a live match takes priority over the next upcoming one
+  const liveM = results && (results.matches || []).find(m => m.state === "in" && T.teams[m.a] && T.teams[m.b]);
+  if (liveM) {
+    const grp = T.teams[liveM.a]?.group;
+    box.classList.add("livebox");
+    box.innerHTML =
+      `<span class="nmlabel live">🔴 LIVE NOW</span>` +
+      `<span class="nmvs">${nmTeam(liveM.a)}<span class="score">${liveM.sa}<span class="dash">–</span>${liveM.sb}</span>${nmTeam(liveM.b)}</span>` +
+      `<span class="nmtime">${grp ? `Group ${grp}` : ""}</span>`;
+    return;
+  }
+  box.classList.remove("livebox");
   if (!fixtures.length) { box.innerHTML = "<span class='nmlabel'>Fixtures unavailable</span>"; return; }
   const now = Date.now() / 1000;
   const nx = fixtures.find(f => f.ts > now);
@@ -297,10 +328,16 @@ async function refresh() {
   latest = await getJSON("data/odds_latest.json");
   try { prev = await getJSON("data/odds_prev.json"); } catch { prev = null; }
   try { fixtures = await getJSON("data/fixtures.json"); } catch { fixtures = []; }
+  try { results = await getJSON("data/results.json"); } catch { results = null; }
   probLatest = fairProbs(latest.winner);
   probPrev = prev ? fairProbs(prev.winner) : {};
   seed = {};
   Object.keys(probLatest).sort((a, b) => probLatest[b] - probLatest[a]).forEach((t, i) => seed[t] = i + 1);
+  standing = {}; matchScore = {};
+  if (results) {
+    for (const L in results.groups) results.groups[L].forEach(r => standing[r.team] = r);
+    (results.matches || []).forEach(m => { matchScore[pairKey(m.a, m.b)] = m; });
+  }
   nextRefreshAt = Date.now() + REFRESH_MS;
   renderAll();
 }
