@@ -56,10 +56,8 @@ const sumProb = (teams, map) => teams.reduce((s, t) => s + (map[t] ?? 0), 0);
 const seedBadge = team => seed[team] ? `<span class="seed" title="Seed ${seed[team]} of 48">${seed[team]}</span>` : "";
 
 /* ---------- standings + knockout projection ---------- */
+// Groups tab orders by odds (the draw view). Real standings live in the Table tab.
 function standings(letter) {
-  // real group order once results exist; otherwise fall back to odds order
-  if (results && results.groups && results.groups[letter])
-    return results.groups[letter].map(r => r.team);
   return [...T.groups[letter]].sort((a, b) => (probLatest[b] ?? 0) - (probLatest[a] ?? 0));
 }
 
@@ -85,15 +83,13 @@ function ownerTag(team) {
 
 /* ---------- groups ---------- */
 function teamRow(team) {
-  const od = ownerDot(team), mv = teamMove(team), s = standing[team];
-  const row = el("div", "trow" + (s && s.out ? " out" : ""));
+  const od = ownerDot(team), mv = teamMove(team);
+  const row = el("div", "trow");
   row.dataset.owned = owned(team);
-  const rec = s && s.P > 0
-    ? `<span class="rec"><b>${s.Pts}</b> pt · ${s.W}-${s.D}-${s.L} · GD ${s.GD > 0 ? "+" + s.GD : s.GD}</span>` : "";
   row.innerHTML =
     `<img src="${FLAG(T.teams[team].iso)}" alt="">` +
-    `<div><div class="tname">${seedBadge(team)}${team}${s && s.out ? ' <span class="outtag">OUT</span>' : ""}</div>` +
-    `<div class="owner"><span class="dot" style="background:${od.color}"></span>${od.name}${rec}</div></div>` +
+    `<div><div class="tname">${seedBadge(team)}${team}</div>` +
+    `<div class="owner"><span class="dot" style="background:${od.color}"></span>${od.name}</div></div>` +
     `<span class="pct">${pct(team)}</span>` +
     `<span class="delta ${mv.cls}">${mv.txt}</span>`;
   return row;
@@ -105,6 +101,37 @@ function renderGroups() {
     standings(L).forEach(t => card.appendChild(teamRow(t)));
     v.appendChild(card);
   });
+}
+
+/* ---------- table / standings ---------- */
+function renderTable() {
+  const v = $("#tableView"); if (!v) return; v.innerHTML = "";
+  if (!results || !results.groups) {
+    v.innerHTML = "<p class='emptynote'>Group tables appear once the tournament is under way.</p>";
+    return;
+  }
+  const grid = el("div", "tablegrid");
+  Object.keys(results.groups).sort().forEach(L => {
+    const card = el("div", "ltcard", `<h3>Group ${L}</h3>`);
+    const body = results.groups[L].map((r, i) => {
+      const od = ownerDot(r.team);
+      const cls = (r.out ? "out" : "") + (i < 2 ? " qual" : "");
+      return `<tr class="${cls}" data-owned="${owned(r.team)}">` +
+        `<td class="pos">${i + 1}</td>` +
+        `<td class="lt-team"><img src="${FLAG(T.teams[r.team]?.iso)}">` +
+        `<span class="lt-nm">${r.team}</span><span class="otag"><span class="dot" style="background:${od.color}"></span>${od.name}</span></td>` +
+        `<td>${r.P}</td><td class="hidem">${r.W}</td><td class="hidem">${r.D}</td><td class="hidem">${r.L}</td>` +
+        `<td class="hidem">${r.GF}</td><td class="hidem">${r.GA}</td>` +
+        `<td>${r.GD > 0 ? "+" + r.GD : r.GD}</td><td class="pts">${r.Pts}</td></tr>`;
+    }).join("");
+    card.innerHTML +=
+      `<table class="ltable"><thead><tr>` +
+      `<th></th><th class="lt-team">Team</th><th>P</th><th class="hidem">W</th><th class="hidem">D</th>` +
+      `<th class="hidem">L</th><th class="hidem">GF</th><th class="hidem">GA</th><th>GD</th><th>Pts</th>` +
+      `</tr></thead><tbody>${body}</tbody></table>`;
+    grid.appendChild(card);
+  });
+  v.appendChild(grid);
 }
 
 /* ---------- knockout (absolute layout + connectors) ---------- */
@@ -315,12 +342,12 @@ function renderNextMatch() {
 
 function renderStatus() {
   if (!latest) return;
-  $("#legend").textContent = prev ? "▲ shortening · ▼ drifting (vs last update)" : "no movement yet";
+  $("#legend").textContent = "▲ shortening · ▼ drifting (last 24h)";
 }
 
 function renderAll() {
   document.body.classList.toggle("filtering", selectedOwners.size > 0);
-  renderOwners(); renderStatus(); renderNextMatch(); renderGroups(); renderKnockout(); renderSchedule(); renderOdds();
+  renderOwners(); renderStatus(); renderNextMatch(); renderGroups(); renderTable(); renderKnockout(); renderSchedule(); renderOdds();
 }
 
 /* ---------- load + poll ---------- */
@@ -329,8 +356,19 @@ async function refresh() {
   try { prev = await getJSON("data/odds_prev.json"); } catch { prev = null; }
   try { fixtures = await getJSON("data/fixtures.json"); } catch { fixtures = []; }
   try { results = await getJSON("data/results.json"); } catch { results = null; }
+  let hist = null;
+  try { hist = await getJSON("data/odds_history.json"); } catch { hist = null; }
   probLatest = fairProbs(latest.winner);
-  probPrev = prev ? fairProbs(prev.winner) : {};
+  // delta baseline = odds as of ~24h ago (so movement stays visible for a day);
+  // fall back to the oldest history entry, then to the previous snapshot
+  let baseWinner = prev ? prev.winner : null;
+  if (hist && hist.length) {
+    const target = latest.timestamp - 86400;
+    let base = hist[0];                       // oldest (history is chronological)
+    for (const h of hist) if (h.ts <= target) base = h;
+    baseWinner = base.winner;
+  }
+  probPrev = baseWinner ? fairProbs(baseWinner) : {};
   seed = {};
   Object.keys(probLatest).sort((a, b) => probLatest[b] - probLatest[a]).forEach((t, i) => seed[t] = i + 1);
   standing = {}; matchScore = {};
@@ -345,6 +383,7 @@ async function refresh() {
 function setView() {
   document.querySelectorAll(".tab").forEach(b => b.classList.toggle("active", b.dataset.view === view));
   $("#groupsView").classList.toggle("hidden", view !== "groups");
+  $("#tableView").classList.toggle("hidden", view !== "table");
   $("#knockoutView").classList.toggle("hidden", view !== "knockout");
   $("#scheduleView").classList.toggle("hidden", view !== "schedule");
 }
@@ -368,8 +407,9 @@ function applyDeepLink() {
   const q = new URLSearchParams(location.search);
   const hv = location.hash.replace("#", "");
   const qv = q.get("view");
-  if (["groups", "knockout", "schedule"].includes(qv)) view = qv;
-  else if (["groups", "knockout", "schedule"].includes(hv)) view = hv;
+  const views = ["groups", "table", "knockout", "schedule"];
+  if (views.includes(qv)) view = qv;
+  else if (views.includes(hv)) view = hv;
   if (q.get("tab") === "players") oddsTab = "players";
   (q.get("owner") || "").split(",").map(s => s.trim()).filter(Boolean).forEach(o => selectedOwners.add(o));
 }

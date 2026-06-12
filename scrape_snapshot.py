@@ -21,6 +21,7 @@ DATA_DIR = "docs/data"
 LATEST = os.path.join(DATA_DIR, "odds_latest.json")
 PREV = os.path.join(DATA_DIR, "odds_prev.json")
 FIXTURES = os.path.join(DATA_DIR, "fixtures.json")
+HISTORY = os.path.join(DATA_DIR, "odds_history.json")
 
 # Men's World Cup competition (for the fixtures list with kickoff times)
 COMP_ID = 23109
@@ -79,6 +80,18 @@ def main():
         shutil.copyfile(LATEST, PREV)
     with open(LATEST, "w") as f:
         json.dump(snapshot, f, ensure_ascii=False)
+
+    # rolling ~26h history of winner odds, so the frontend can show 24h movement
+    try:
+        with open(HISTORY) as f:
+            hist = json.load(f)
+    except Exception:
+        hist = []
+    hist.append({"ts": snapshot["timestamp"], "winner": snapshot["winner"]})
+    cutoff = snapshot["timestamp"] - 26 * 3600
+    hist = [h for h in hist if h.get("ts", 0) >= cutoff]
+    with open(HISTORY, "w") as f:
+        json.dump(hist, f, ensure_ascii=False)
 
     n = len(snapshot["winner"])
     print(f"Wrote {LATEST} @ {snapshot['iso_time']} — {n} teams priced "

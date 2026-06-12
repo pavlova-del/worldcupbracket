@@ -34,7 +34,7 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add docs/data/odds_latest.json docs/data/odds_prev.json docs/data/fixtures.json docs/data/results.json
+          git add docs/data/odds_latest.json docs/data/odds_prev.json docs/data/odds_history.json docs/data/fixtures.json docs/data/results.json
           if git diff --staged --quiet; then
             echo "No change."
           else
