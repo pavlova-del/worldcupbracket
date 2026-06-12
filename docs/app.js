@@ -456,7 +456,8 @@ function initInfo() {
   const modal = el("div", "infomodal hidden");
   modal.innerHTML =
     `<div class="infocard"><button class="infoclose" aria-label="Close">✕</button>` +
-    `<h2>What do the numbers mean?</h2><dl>` +
+    `<h2>What do the numbers mean?</h2>` +
+    `<button class="tour-start">👆 Show me on the dashboard</button><dl>` +
     `<dt>Win %</dt><dd>Each team's chance of winning the <b>whole tournament</b>, from the bookies' outright odds (rescaled so all teams add up to 100%). Higher = more likely.</dd>` +
     `<dt>Outright odds</dt><dd>The bookmaker's price on a team to lift the trophy — not to win a single match. We convert that price into the Win %.</dd>` +
     `<dt>Seed</dt><dd>A team's strength ranking by current odds: <b>1</b> is the favourite, <b>48</b> the longest shot.</dd>` +
@@ -470,10 +471,94 @@ function initInfo() {
   const close = () => modal.classList.add("hidden");
   btn.onclick = () => modal.classList.remove("hidden");
   modal.querySelector(".infoclose").onclick = close;
+  modal.querySelector(".tour-start").onclick = () => { close(); startTour(); };
   modal.addEventListener("click", e => { if (e.target === modal) close(); });
   document.addEventListener("keydown", e => { if (e.key === "Escape") close(); });
   if (location.hash === "#info") modal.classList.remove("hidden");
 }
+
+/* ---------- guided "coach marks" tour ---------- */
+const TOUR = [
+  { sel: ".tabs", title: "The views", text: "Switch between Groups, the live Table (standings), the Knockout bracket and the Schedule." },
+  { sel: "#groupsView .trow .seed", title: "Seed", text: "A team's strength rank by the odds — <b>1</b> is the favourite, <b>48</b> the longest shot." },
+  { sel: "#groupsView .trow .pct", title: "Win %", text: "This team's chance of winning the <b>whole tournament</b> (from the bookies' outright odds)." },
+  { sel: "#groupsView .trow .delta", title: "24h movement", text: "<span class='up'>▲ green</span> = odds shortening (more likely); <span class='down'>▼ red</span> = drifting (less likely), vs 24h ago." },
+  { sel: "#groupsView .trow .owner", title: "Owner", text: "Which player owns this team. Tap a player up the top to highlight all of theirs." },
+  { sel: "#nextmatch", title: "Next / live match", text: "The next kick-off in AEST — or a live game with its score and a glowing border." },
+  { sel: "#oddsPanel", title: "Live odds", text: "Every team ranked by chance to win, plus a <b>Player slips</b> tab ranking all of us by combined odds." },
+];
+let tourI = 0, tourEls = null, tourTarget = null;
+
+function ensureTourEls() {
+  if (tourEls) return tourEls;
+  const ns = "http://www.w3.org/2000/svg";
+  const overlay = el("div", "tour-overlay");
+  const spot = el("div", "tour-spot");
+  const svg = document.createElementNS(ns, "svg"); svg.setAttribute("class", "tour-svg");
+  const line = document.createElementNS(ns, "line"); line.setAttribute("class", "tour-line");
+  const dot = document.createElementNS(ns, "circle"); dot.setAttribute("class", "tour-dot"); dot.setAttribute("r", "5");
+  svg.append(line, dot);
+  const pop = el("div", "tour-pop");
+  overlay.onclick = endTour;
+  pop.onclick = e => e.stopPropagation();
+  document.body.append(overlay, spot, svg, pop);
+  window.addEventListener("resize", repositionTour);
+  window.addEventListener("scroll", repositionTour, true);
+  return (tourEls = { overlay, spot, svg, line, dot, pop });
+}
+
+function startTour() {
+  view = "groups"; setView();          // tour targets live on the Groups view
+  ensureTourEls(); tourI = 0; showStep();
+}
+
+function showStep() {
+  const step = TOUR[tourI];
+  const t = document.querySelector(step.sel);
+  if (!t) { if (tourI < TOUR.length - 1) { tourI++; return showStep(); } return endTour(); }
+  tourTarget = t;
+  t.scrollIntoView({ block: "center", inline: "nearest" });
+  requestAnimationFrame(() => positionStep());
+}
+
+function positionStep() {
+  if (!tourEls || !tourTarget) return;
+  const step = TOUR[tourI], { spot, pop, line, dot } = tourEls;
+  const r = tourTarget.getBoundingClientRect(), pad = 6, vw = innerWidth, vh = innerHeight;
+  spot.style.cssText = `top:${r.top - pad}px;left:${r.left - pad}px;width:${r.width + 2 * pad}px;height:${r.height + 2 * pad}px;`;
+  pop.innerHTML = `<h3>${step.title}</h3><p>${step.text}</p>` +
+    `<div class="tour-nav"><span class="step">${tourI + 1} / ${TOUR.length}</span><span>` +
+    `<button class="tour-btn ghost" data-act="prev"${tourI ? "" : " disabled"}>Back</button>` +
+    `<button class="tour-btn" data-act="next">${tourI === TOUR.length - 1 ? "Done" : "Next"}</button></span></div>`;
+  pop.querySelectorAll("[data-act]").forEach(b => b.onclick = () => {
+    tourI += b.dataset.act === "next" ? 1 : -1;
+    if (tourI >= TOUR.length) return endTour();
+    if (tourI < 0) tourI = 0;
+    showStep();
+  });
+  const pr = pop.getBoundingClientRect();
+  let left = Math.min(Math.max(8, r.left), vw - pr.width - 8);
+  const below = r.bottom + 14 + pr.height < vh;
+  let top = below ? r.bottom + 14 : Math.max(8, r.top - pr.height - 14);
+  pop.style.top = top + "px"; pop.style.left = left + "px";
+  // connector line from the popup edge to the highlighted box
+  const px = left + pr.width / 2, py = below ? top : top + pr.height;
+  const ty = below ? r.bottom : r.top, tx = Math.min(Math.max(r.left + r.width / 2, left), left + pr.width);
+  line.setAttribute("x1", px); line.setAttribute("y1", py);
+  line.setAttribute("x2", tx); line.setAttribute("y2", ty);
+  dot.setAttribute("cx", tx); dot.setAttribute("cy", ty);
+}
+
+function repositionTour() { if (tourEls && tourEls.overlay.isConnected) positionStep(); }
+
+function endTour() {
+  if (!tourEls) return;
+  window.removeEventListener("resize", repositionTour);
+  window.removeEventListener("scroll", repositionTour, true);
+  Object.values(tourEls).forEach(n => n.remove && n.remove());
+  tourEls = null; tourTarget = null;
+}
+
 
 function tick() {
   if (!latest) return;
@@ -505,7 +590,7 @@ async function load() {
   try { initTabs(); applyDeepLink(); initInfo(); } catch (e) { /* keep going even if a control is missing */ }
   let started = false;
   const start = () => load()
-    .then(() => { if (!started) { started = true; setInterval(tick, 1000); fetchLive(); setInterval(fetchLive, 60000); } })
+    .then(() => { if (!started) { started = true; setInterval(tick, 1000); fetchLive(); setInterval(fetchLive, 60000); if (location.hash === "#tour") setTimeout(startTour, 300); } })
     .catch(err => {
       console.error(err);
       const n = document.getElementById("nextmatch");
