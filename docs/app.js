@@ -275,15 +275,20 @@ function renderSchedule() {
   });
   v.appendChild(tabs);
 
-  if (!fixtures.length) { v.appendChild(el("p", "emptynote", "Fixtures unavailable.")); return; }
   const now = Date.now() / 1000;
   const nextTs = (fixtures.find(f => f.ts > now) || {}).ts;
 
-  let list = fixtures.slice();
+  let list;
   if (schedMode === "results") {
-    list = list.filter(f => { const m = getMatch(f.a, f.b); return m && m.state !== "pre"; })
-               .sort((a, b) => b.ts - a.ts);   // most recent first
+    // played games come from results.json (ESPN keeps every match) — Sportsbet's
+    // fixtures list drops games once they kick off, so we can't use it here
+    list = ((results && results.matches) || [])
+      .filter(m => m.state !== "pre" && T.teams[m.a] && T.teams[m.b])
+      .sort((a, b) => b.ts - a.ts);   // most recent first
     if (!list.length) { v.appendChild(el("p", "emptynote", "No games played yet — check back after the first kick-off.")); return; }
+  } else {
+    list = fixtures.slice();
+    if (!list.length) { v.appendChild(el("p", "emptynote", "Fixtures unavailable.")); return; }
   }
   let lastDay = null;
   list.forEach(f => {
@@ -455,6 +460,7 @@ function applyDeepLink() {
   if (views.includes(qv)) view = qv;
   else if (views.includes(hv)) view = hv;
   if (q.get("tab") === "players") oddsTab = "players";
+  if (q.get("sched") === "results") schedMode = "results";
   (q.get("owner") || "").split(",").map(s => s.trim()).filter(Boolean).forEach(o => selectedOwners.add(o));
 }
 
