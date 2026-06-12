@@ -59,8 +59,22 @@ body {
 .nmteam .nm-owner .dot { width:8px; height:8px; border-radius:50%; }
 .nmvs .vs { color:var(--dim); font-size:12px; }
 .nmtime { color:var(--dim); font-size:12.5px; }
-.nextbox.livebox { border-left-color:var(--down); }
+/* live tracker: a highlight that sweeps around the card border */
+@property --livea { syntax:"<angle>"; inherits:false; initial-value:0deg; }
+.nextbox.livebox { position:relative; border:1.5px solid transparent; }
+.nextbox.livebox::before {
+  content:""; position:absolute; inset:0; border-radius:inherit; padding:1.5px; pointer-events:none;
+  background:conic-gradient(from var(--livea), transparent 0deg 215deg, var(--down) 300deg, #ffcf6b 332deg, transparent 360deg);
+  -webkit-mask:linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+          mask:linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite:xor; mask-composite:exclude;
+  animation:livespin 3s linear infinite;
+}
+@keyframes livespin { to { --livea:360deg; } }
+@media (prefers-reduced-motion:reduce){ .nextbox.livebox::before { animation:none; background:var(--down); } }
 .nmlabel.live { color:var(--down); }
+.nmlabel.live::before { content:""; display:inline-block; width:7px; height:7px; border-radius:50%; background:var(--down); margin-right:5px; vertical-align:middle; animation:livepulse 1.4s ease-in-out infinite; }
+@keyframes livepulse { 0%,100%{ opacity:1; box-shadow:0 0 0 0 rgba(226,72,59,.6);} 50%{ opacity:.5; box-shadow:0 0 0 5px rgba(226,72,59,0);} }
 .nmvs .score { font-size:18px; }
 
 /* ---- owner filter ---- */

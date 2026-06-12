@@ -348,7 +348,7 @@ function renderNextMatch() {
     const grp = T.teams[liveM.a]?.group;
     box.classList.add("livebox");
     box.innerHTML =
-      `<span class="nmlabel live">🔴 LIVE NOW</span>` +
+      `<span class="nmlabel live">LIVE NOW</span>` +
       `<span class="nmvs">${nmTeam(liveM.a)}<span class="score">${liveM.sa}<span class="dash">–</span>${liveM.sb}</span>${nmTeam(liveM.b)}</span>` +
       `<span class="nmtime">${grp ? `Group ${grp}` : ""}</span>`;
     return;
