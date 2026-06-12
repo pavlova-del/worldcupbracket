@@ -99,7 +99,7 @@ main { display:flex; flex:1; gap:14px; padding:14px 20px 20px; min-height:0; }
 .tab.active { color:#08231a; background:var(--gold); border-color:var(--gold); }
 .legend { margin-left:auto; color:var(--dim); font-size:12px; }
 .hidden { display:none; }
-#groupsView.hidden, #knockoutView.hidden, #scheduleView.hidden { display:none; }
+#groupsView.hidden, #tableView.hidden, #knockoutView.hidden, #scheduleView.hidden { display:none; }
 
 /* ---- schedule / calendar ---- */
 .emptynote { color:var(--dim); padding:10px; }
