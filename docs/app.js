@@ -456,8 +456,7 @@ function initInfo() {
   const modal = el("div", "infomodal hidden");
   modal.innerHTML =
     `<div class="infocard"><button class="infoclose" aria-label="Close">✕</button>` +
-    `<h2>What do the numbers mean?</h2>` +
-    `<button class="tour-start">👆 Show me on the dashboard</button><dl>` +
+    `<h2>What do the numbers mean?</h2><dl>` +
     `<dt>Win %</dt><dd>Each team's chance of winning the <b>whole tournament</b>, from the bookies' outright odds (rescaled so all teams add up to 100%). Higher = more likely.</dd>` +
     `<dt>Outright odds</dt><dd>The bookmaker's price on a team to lift the trophy — not to win a single match. We convert that price into the Win %.</dd>` +
     `<dt>Seed</dt><dd>A team's strength ranking by current odds: <b>1</b> is the favourite, <b>48</b> the longest shot.</dd>` +
@@ -466,7 +465,7 @@ function initInfo() {
     `<dt>Player slips</dt><dd>Your overall chance: the Win % of all the teams you own, added together.</dd>` +
     `<dt>Table</dt><dd>Live group standings. The top two (green bar) qualify; greyed-out teams are knocked out.</dd>` +
     `<dt>Live</dt><dd>Scores update in real time; the glowing card is a match in progress.</dd>` +
-    `</dl></div>`;
+    `</dl><button class="tour-start">Take The Tour</button></div>`;
   document.body.appendChild(modal);
   const close = () => modal.classList.add("hidden");
   btn.onclick = () => modal.classList.remove("hidden");
