@@ -16,8 +16,34 @@ let oddsTab = "teams";
 let nextRefreshAt = 0;
 let shownTeam = {}, shownPlayer = {};   // last-rendered values, to flash on change
 let fixtures = [];
-let results = null, standing = {}, matchScore = {};   // ESPN standings + scores
+let results = null, standing = {}, matchScore = {};   // committed ESPN standings + scores
+let liveScores = {};                                   // live overlay fetched client-side
 const pairKey = (a, b) => [a, b].sort().join("|");
+const getMatch = (a, b) => liveScores[pairKey(a, b)] || matchScore[pairKey(a, b)];
+const ESPN_SB = "https://site.api.espn.com/apis/site/v2/sports/soccer/fifa.world/scoreboard";
+const ESPN_NAME = { "Bosnia-Herzegovina": "Bosnia & Herzegovina", "Congo DR": "DR Congo", "Curaçao": "Curacao", "United States": "USA" };
+const espnNorm = n => ESPN_NAME[n] || n;
+
+// live scores straight from ESPN (CORS-enabled) every 60s — no push/deploy lag
+async function fetchLive() {
+  try {
+    const r = await fetch(`${ESPN_SB}?t=${Date.now()}`, { cache: "no-store" });
+    if (!r.ok) return;
+    const d = await r.json();
+    const next = {};
+    (d.events || []).forEach(ev => {
+      const c = (ev.competitions || [])[0]; if (!c) return;
+      const cs = c.competitors || [];
+      const home = cs.find(x => x.homeAway === "home"), away = cs.find(x => x.homeAway === "away");
+      if (!home || !away) return;
+      const a = espnNorm(home.team.displayName), b = espnNorm(away.team.displayName);
+      next[pairKey(a, b)] = { a, b, sa: parseInt(home.score) || 0, sb: parseInt(away.score) || 0,
+                              state: ev.status?.type?.state || "pre" };
+    });
+    liveScores = next;
+    if (T) { renderNextMatch(); renderSchedule(); }
+  } catch (e) { /* offline / ESPN hiccup — keep last known */ }
+}
 let seed = {};                          // team -> overall seed (1 = strongest by odds)
 const AEST = new Intl.DateTimeFormat("en-AU", { timeZone: "Australia/Brisbane", weekday: "short", day: "numeric", month: "short", hour: "numeric", minute: "2-digit", hour12: true });
 
@@ -110,7 +136,6 @@ function renderTable() {
     v.innerHTML = "<p class='emptynote'>Group tables appear once the tournament is under way.</p>";
     return;
   }
-  const grid = el("div", "tablegrid");
   Object.keys(results.groups).sort().forEach(L => {
     const card = el("div", "ltcard", `<h3>Group ${L}</h3>`);
     const body = results.groups[L].map((r, i) => {
@@ -129,9 +154,8 @@ function renderTable() {
       `<th></th><th class="lt-team">Team</th><th>P</th><th class="hidem">W</th><th class="hidem">D</th>` +
       `<th class="hidem">L</th><th class="hidem">GF</th><th class="hidem">GA</th><th>GD</th><th>Pts</th>` +
       `</tr></thead><tbody>${body}</tbody></table>`;
-    grid.appendChild(card);
+    v.appendChild(card);
   });
-  v.appendChild(grid);
 }
 
 /* ---------- knockout (absolute layout + connectors) ---------- */
@@ -227,7 +251,7 @@ function renderSchedule() {
     const day = DAY_FMT.format(new Date(f.ts * 1000));
     if (day !== lastDay) { v.appendChild(el("div", "schedday", day)); lastDay = day; }
     const grp = T.teams[f.a]?.group;
-    const m = matchScore[pairKey(f.a, f.b)];
+    const m = getMatch(f.a, f.b);
     const played = m && m.state !== "pre";
     const live = m && m.state === "in";
     // results store score by (a,b) sorted — figure out which side is f.a
@@ -317,8 +341,9 @@ function nmTeam(name) {
 }
 function renderNextMatch() {
   const box = $("#nextmatch"); if (!box) return;
-  // a live match takes priority over the next upcoming one
-  const liveM = results && (results.matches || []).find(m => m.state === "in" && T.teams[m.a] && T.teams[m.b]);
+  // a live match takes priority over the next upcoming one (live overlay first)
+  const liveM = Object.values(liveScores).find(m => m.state === "in" && T.teams[m.a] && T.teams[m.b])
+    || (results && (results.matches || []).find(m => m.state === "in" && T.teams[m.a] && T.teams[m.b]));
   if (liveM) {
     const grp = T.teams[liveM.a]?.group;
     box.classList.add("livebox");
@@ -426,7 +451,7 @@ async function load() {
   try { initTabs(); applyDeepLink(); } catch (e) { /* keep going even if a control is missing */ }
   let started = false;
   const start = () => load()
-    .then(() => { if (!started) { started = true; setInterval(tick, 1000); } })
+    .then(() => { if (!started) { started = true; setInterval(tick, 1000); fetchLive(); setInterval(fetchLive, 60000); } })
     .catch(err => {
       console.error(err);
       const n = document.getElementById("nextmatch");
