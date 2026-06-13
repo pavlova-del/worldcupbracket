@@ -219,6 +219,11 @@ main { display:flex; flex:1; gap:14px; padding:14px 20px 20px; min-height:0; }
 .kvsep { position:absolute; background:rgba(255,255,255,.05); }
 .pslot .nm { color:var(--dim); font-weight:600; }
 .pslot .kdot { width:7px; height:7px; border-radius:50%; background:#2c5142; justify-self:center; }
+.slot .kscore { font-size:12px; font-weight:700; color:var(--ink); padding-right:8px; text-align:right; }
+.kbox .slot.kwin .nm { font-weight:800; color:var(--ink); }
+.kbox .slot.kwin .kscore { color:var(--gold); }
+.kbox .slot.klose { opacity:.5; }
+.kbox .slot.klose .nm { text-decoration:line-through; }
 .ktitle { position:absolute; color:var(--gold); font-size:12px; font-weight:700; transform:translateX(-2px); }
 .kchamp { position:absolute; transform:translateY(-50%); text-align:center; }
 .match { background:var(--panel2); border:1px solid var(--line); border-radius:9px; overflow:hidden; }

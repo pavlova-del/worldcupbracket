@@ -101,6 +101,12 @@ def main():
             sa, sbs = int(home.get("score") or 0), int(away.get("score") or 0)
         except ValueError:
             sa, sbs = 0, 0
+        # advancing team (handles penalty shootouts) via ESPN's per-competitor winner flag
+        win = None
+        if home.get("winner"):
+            win = norm(home["team"]["displayName"])
+        elif away.get("winner"):
+            win = norm(away["team"]["displayName"])
         matches.append({
             "ts": to_ts(ev.get("date", "")),
             "a": norm(home["team"]["displayName"]),
@@ -108,6 +114,7 @@ def main():
             "sa": sa, "sb": sbs,
             "state": state,
             "completed": bool(ev.get("status", {}).get("type", {}).get("completed")),
+            "w": win,
         })
 
     data = {"updated": int(dt.datetime.now().timestamp()), "groups": groups, "matches": matches}

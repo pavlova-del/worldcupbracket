@@ -25,10 +25,16 @@ const ESPN_SB = "https://site.api.espn.com/apis/site/v2/sports/soccer/fifa.world
 const ESPN_NAME = { "Bosnia-Herzegovina": "Bosnia & Herzegovina", "Congo DR": "DR Congo", "Curaçao": "Curacao", "United States": "USA" };
 const espnNorm = n => ESPN_NAME[n] || n;
 
-// live scores straight from ESPN (CORS-enabled) every 60s — no push/deploy lag
+// live scores straight from ESPN (CORS-enabled) every 60s — no push/deploy lag.
+// ESPN's default scoreboard only returns one matchday (often yesterday's finished
+// games), so query an explicit window (yesterday → tomorrow) to always catch the
+// current/live match.
+const ymd = d => d.toISOString().slice(0, 10).replace(/-/g, "");
 async function fetchLive() {
   try {
-    const r = await fetch(`${ESPN_SB}?t=${Date.now()}`, { cache: "no-store" });
+    const now = Date.now();
+    const url = `${ESPN_SB}?dates=${ymd(new Date(now - 36e5 * 36))}-${ymd(new Date(now + 36e5 * 24))}&t=${now}`;
+    const r = await fetch(url, { cache: "no-store" });
     if (!r.ok) return;
     const d = await r.json();
     const next = {};
@@ -38,8 +44,9 @@ async function fetchLive() {
       const home = cs.find(x => x.homeAway === "home"), away = cs.find(x => x.homeAway === "away");
       if (!home || !away) return;
       const a = espnNorm(home.team.displayName), b = espnNorm(away.team.displayName);
+      const w = home.winner ? a : (away.winner ? b : null);   // advancing team (incl. penalties)
       next[pairKey(a, b)] = { a, b, sa: parseInt(home.score) || 0, sb: parseInt(away.score) || 0,
-                              state: ev.status?.type?.state || "pre" };
+                              state: ev.status?.type?.state || "pre", w };
     });
     liveScores = next;
     if (T) { renderNextMatch(); renderSchedule(); }
@@ -172,6 +179,74 @@ function pslot(text) {
   s.innerHTML = `<span></span><span class="kdot"></span><span class="nm">${text}</span><span></span>`;
   return s;
 }
+// a knockout slot once a real team is known (flag + owner colour + score + win/lose)
+function kslot(team, opts) {
+  const s = el("div", "slot" + (opts.won ? " kwin" : "") + (opts.lost ? " klose" : ""));
+  const od = ownerDot(team);
+  s.style.borderLeftColor = od.color;
+  s.dataset.owned = owned(team);
+  s.title = `${team} — ${od.name}`;
+  s.innerHTML = `<span></span><img src="${FLAG(T.teams[team].iso)}" alt="">` +
+    `<span class="nm">${team}</span><span class="kscore">${opts.score}</span>`;
+  return s;
+}
+// assign the 8 best third-placed teams to the third-slots, respecting allowed groups
+function assignThirds(slots, qualifying) {
+  const assign = {}, used = new Set();
+  (function bt(i) {
+    if (i === slots.length) return true;
+    for (const q of qualifying) {
+      if (!used.has(q.group) && slots[i].groups.includes(q.group)) {
+        used.add(q.group); assign[slots[i].key] = q.team;
+        if (bt(i + 1)) return true;
+        used.delete(q.group); delete assign[slots[i].key];
+      }
+    }
+    return false;
+  })(0);
+  return assign;
+}
+// resolve real teams into bracket slots from group standings + actual match winners
+function resolveBracket(matchById) {
+  const groups = (results && results.groups) || {};
+  const rank = {}, done = {};
+  Object.keys(groups).forEach(g => {
+    rank[g] = groups[g].map(r => r.team);
+    done[g] = groups[g].length === 4 && groups[g].every(r => r.P >= 3);
+  });
+  let thirds = {};
+  const allDone = Object.keys(groups).length === 12 && Object.values(done).every(Boolean);
+  if (allDone) {
+    const q = Object.keys(groups).map(g => ({ team: groups[g][2].team, group: g, Pts: groups[g][2].Pts, GD: groups[g][2].GD, GF: groups[g][2].GF }))
+      .sort((a, b) => b.Pts - a.Pts || b.GD - a.GD || b.GF - a.GF).slice(0, 8);
+    const slots = [];
+    T.knockout.forEach(m => ["home", "away"].forEach(side => {
+      if (m[side].pos === "3") slots.push({ key: `${m.id}-${side}`, groups: m[side].groups });
+    }));
+    thirds = assignThirds(slots, q);
+  }
+  const cache = {};
+  function slotTeam(slot, key) {
+    if (slot.win) return matchWinner(slot.win);
+    if (slot.pos === "W") return done[slot.group] ? rank[slot.group][0] : null;
+    if (slot.pos === "R") return done[slot.group] ? rank[slot.group][1] : null;
+    if (slot.pos === "3") return thirds[key] || null;
+    return null;
+  }
+  function matchWinner(mid) {
+    if (mid in cache) return cache[mid];
+    cache[mid] = null;
+    const m = matchById[mid];
+    const h = slotTeam(m.home, `${mid}-home`), a = slotTeam(m.away, `${mid}-away`);
+    if (h && a) {
+      const res = getMatch(h, a);
+      if (res && res.state === "post")
+        cache[mid] = res.w || (res.sa === res.sb ? null : (res.a === h ? (res.sa > res.sb ? h : a) : (res.sa > res.sb ? a : h)));
+    }
+    return cache[mid];
+  }
+  return { slotTeam, matchWinner };
+}
 function line(parent, x, y, w, h, cls) {
   const d = el("div", cls || "kline");
   d.style.left = x + "px"; d.style.top = y + "px"; d.style.width = w + "px"; d.style.height = h + "px";
@@ -220,21 +295,47 @@ function renderKnockout() {
     line(wrap, midX - 1, yp - 1, parentLeft - midX + 1, 2);
   });
 
-  // placeholder match boxes
+  // match boxes — real teams once known, otherwise the position placeholder
+  const { slotTeam, matchWinner } = resolveBracket(matchById);
+  const slotFor = (m, side) => {
+    const key = `${m.id}-${side}`, team = slotTeam(m[side], key);
+    if (!team) return { team: null, label: placeholderText(m[side], matchById) };
+    return { team, key };
+  };
   T.knockout.forEach(m => {
     const box = el("div", "kbox");
     box.style.left = ROUND_COL[m.round] * COLW + "px";
     box.style.top = ypx(yUnit[m.id]) + "px";
     box.style.width = MATCHW + "px";
-    box.appendChild(pslot(placeholderText(m.home, matchById)));
-    box.appendChild(pslot(placeholderText(m.away, matchById)));
+    const h = slotFor(m, "home"), a = slotFor(m, "away");
+    const res = (h.team && a.team) ? getMatch(h.team, a.team) : null;
+    const played = res && res.state !== "pre";
+    const winner = matchWinner(m.id);
+    let hs = "", as = "";
+    if (played) { const flip = res.a !== h.team; hs = flip ? res.sb : res.sa; as = flip ? res.sa : res.sb; }
+    [[h, hs], [a, as]].forEach(([slot, score]) => {
+      if (!slot.team) { box.appendChild(pslot(slot.label)); return; }
+      box.appendChild(kslot(slot.team, {
+        score: score === "" ? "" : score,
+        won: winner && winner === slot.team,
+        lost: winner && winner !== slot.team,
+      }));
+    });
     wrap.appendChild(box);
   });
 
-  // winner placeholder
+  // champion (filled when the final is decided)
+  const champ = matchWinner(104);
   const c = el("div", "kchamp");
   c.style.left = (5 * COLW) + "px"; c.style.top = ypx(yUnit[104]) + "px"; c.style.width = MATCHW + "px";
-  c.innerHTML = `<div style="font-size:30px">🏆</div><div style="font-weight:800;color:var(--gold)">TBD</div>`;
+  if (champ) {
+    const od = ownerDot(champ);
+    c.innerHTML = `<img src="${FLAG(T.teams[champ].iso)}" style="width:46px;height:31px;border-radius:3px">` +
+      `<div style="font-weight:800;margin-top:4px">${champ}</div>` +
+      `<div class="owner" style="justify-content:center"><span class="dot" style="background:${od.color}"></span>${od.name}</div>`;
+  } else {
+    c.innerHTML = `<div style="font-size:30px">🏆</div><div style="font-weight:800;color:var(--gold)">TBD</div>`;
+  }
   wrap.appendChild(c);
   v.appendChild(wrap);
 }
