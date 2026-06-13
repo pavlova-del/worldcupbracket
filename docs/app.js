@@ -2,6 +2,11 @@
 
 const REFRESH_MS = 60000;
 const FLAG = iso => `https://flagcdn.com/w40/${iso}.png`;
+// Live data is served by the Raspberry Pi (always-on, home AU IP). Set DATA_API
+// to the Pi's public URL to read live; empty = use the committed Pages snapshot.
+const DATA_API = "";
+const DYNAMIC = new Set(["odds_latest.json", "odds_prev.json", "odds_history.json", "fixtures.json", "results.json"]);
+let piLive = false;   // did the dynamic data load from the Pi this refresh?
 
 // bracket geometry (px)
 const H = 64, HEADER_H = 28, MATCHW = 170, HGAP = 40, COLW = MATCHW + HGAP;
@@ -149,6 +154,15 @@ const $ = sel => document.querySelector(sel);
 const el = (tag, cls, html) => { const e = document.createElement(tag); if (cls) e.className = cls; if (html != null) e.innerHTML = html; return e; };
 
 async function getJSON(path) {
+  const name = path.split("/").pop();
+  // dynamic data → try the Pi's live API first, fall back to the Pages snapshot
+  if (DATA_API && DYNAMIC.has(name)) {
+    try {
+      const r = await fetch(`${DATA_API}/data/${name}?t=${Date.now()}`, { cache: "no-store" });
+      if (r.ok) { const j = await r.json(); piLive = true; return j; }
+    } catch (e) { /* Pi unreachable — fall back below */ }
+    piLive = false;
+  }
   const r = await fetch(`${path}?t=${Date.now()}`, { cache: "no-store" });
   if (!r.ok) throw new Error(`${path}: ${r.status}`);
   return r.json();
@@ -600,7 +614,10 @@ function renderNextMatch() {
 
 function renderStatus() {
   if (!latest) return;
-  $("#legend").textContent = "▲ shortening · ▼ drifting (last 24h)";
+  const offline = DATA_API && !piLive;
+  $("#legend").textContent = offline
+    ? "▲▼ last 24h · ⚠ live data offline — showing last snapshot"
+    : "▲ shortening · ▼ drifting (last 24h)";
 }
 
 function renderAll() {

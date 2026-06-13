@@ -1,0 +1,19 @@
+# Reference systemd unit — PI_SETUP.md generates the real one with your paths.
+[Unit]
+Description=World Cup live data server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=__USER__
+WorkingDirectory=__HOME__/worldcupbracket
+EnvironmentFile=__HOME__/wc-data/.env
+Environment=WC_DATA_DIR=__HOME__/wc-data
+Environment=WC_PORT=8090
+ExecStart=/usr/bin/python3 __HOME__/worldcupbracket/pi_server.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

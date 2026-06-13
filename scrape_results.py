@@ -22,7 +22,7 @@ import urllib.request
 
 STANDINGS = "https://site.api.espn.com/apis/v2/sports/soccer/fifa.world/standings"
 SCOREBOARD = "https://site.api.espn.com/apis/site/v2/sports/soccer/fifa.world/scoreboard?dates=20260601-20260720"
-OUT = "docs/data/results.json"
+OUT = os.path.join(os.environ.get("WC_DATA_DIR", "docs/data"), "results.json")
 
 NAME = {  # ESPN spelling -> canonical (tournament.json) spelling
     "Bosnia-Herzegovina": "Bosnia & Herzegovina",

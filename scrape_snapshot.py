@@ -17,7 +17,7 @@ import shutil
 
 import scrape_sportsbet_wc as sb
 
-DATA_DIR = "docs/data"
+DATA_DIR = os.environ.get("WC_DATA_DIR", "docs/data")
 LATEST = os.path.join(DATA_DIR, "odds_latest.json")
 PREV = os.path.join(DATA_DIR, "odds_prev.json")
 FIXTURES = os.path.join(DATA_DIR, "fixtures.json")
