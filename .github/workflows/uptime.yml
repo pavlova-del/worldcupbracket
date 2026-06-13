@@ -1,0 +1,98 @@
+name: Pi uptime monitor
+
+# External watchdog for the always-on Raspberry Pi + Tailscale Funnel that serves
+# live odds/results. Runs on GitHub's infra (independent of the Pi and the Mac), so
+# it can actually notice when the Pi is the thing that's down.
+#
+# A failed run notifies you two ways:
+#   * email  — GitHub's default notification for a failed scheduled workflow
+#   * phone  — an ntfy.sh push (only if the NTFY_TOPIC repo secret is set)
+#
+# It catches two distinct failure modes:
+#   1. Funnel/Pi unreachable  -> /health doesn't answer "ok"
+#   2. Pi up but data frozen   -> /data/odds_latest.json timestamp is stale
+#      (e.g. Sportsbet started 403-ing the residential IP and the scraper wedged)
+#
+# Setup for phone push (optional):
+#   1. Install the ntfy app (iOS/Android) and subscribe to a topic, e.g. wc-pi-4a5eda9a
+#   2. Repo -> Settings -> Secrets and variables -> Actions -> New repository secret
+#      Name: NTFY_TOPIC   Value: <that same topic>
+#   (Keep the topic private — anyone who knows it can read/post to it. That's why it
+#    lives in a secret, not in this public file.)
+# Optional: set repo variable HEALTH_URL to override the Funnel URL.
+
+on:
+  schedule:
+    - cron: "*/15 * * * *"   # every 15 min (GitHub may delay under load)
+  workflow_dispatch: {}
+
+concurrency:
+  group: uptime
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    env:
+      BASE: ${{ vars.HEALTH_URL || 'https://vulcan.tailee0fb5.ts.net' }}
+    steps:
+      - name: Health check (Funnel → Pi)
+        run: |
+          set -uo pipefail
+          ok=0
+          for i in 1 2 3 4 5; do
+            if curl -fsS --max-time 20 "$BASE/health" | grep -qi "ok"; then ok=1; break; fi
+            echo "attempt $i: no healthy response — retrying in 30s…"
+            sleep 30
+          done
+          if [ "$ok" -ne 1 ]; then
+            echo "ALERT=Pi/Funnel DOWN — $BASE/health did not respond for ~2.5 min. The Pi or the Tailscale Funnel is down." >> "$GITHUB_ENV"
+            echo "::error title=Pi/Funnel DOWN::$BASE/health unreachable after 5 attempts."
+            exit 1
+          fi
+          echo "Pi healthy ✓"
+
+      - name: Data freshness check (catches a wedged scraper)
+        env:
+          MAX_AGE_SECS: "7200"   # 2h: well beyond the 60s scrape cadence
+        run: |
+          set -uo pipefail
+          ts=$(curl -fsS --max-time 20 "$BASE/data/odds_latest.json" \
+                | python3 -c "import sys,json;print(int(json.load(sys.stdin).get('timestamp',0)))" 2>/dev/null || echo 0)
+          if [ "$ts" -le 0 ]; then
+            echo "ALERT=Pi up but $BASE/data/odds_latest.json was unreadable." >> "$GITHUB_ENV"
+            echo "::error title=Data unreadable::Could not read a timestamp from odds_latest.json."
+            exit 1
+          fi
+          now=$(date +%s); age=$(( now - ts ))
+          echo "odds_latest.json is ${age}s old (limit ${MAX_AGE_SECS}s)."
+          if [ "$age" -gt "$MAX_AGE_SECS" ]; then
+            echo "ALERT=Pi is up but odds are ${age}s old — the scraper is likely wedged or Sportsbet is blocking the IP." >> "$GITHUB_ENV"
+            echo "::error title=Data stale::odds are ${age}s old."
+            exit 1
+          fi
+          echo "Data fresh ✓"
+
+      - name: Phone push on failure (ntfy)
+        if: failure()
+        env:
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+        run: |
+          set -uo pipefail
+          if [ -z "${NTFY_TOPIC:-}" ]; then
+            echo "No NTFY_TOPIC secret set — skipping phone push (email notification still fires)."
+            exit 0
+          fi
+          msg="${ALERT:-World Cup Pi monitor failed — check the Actions run.}"
+          run_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          curl -fsS \
+            -H "Title: ⚽ WC Pi monitor" \
+            -H "Priority: high" \
+            -H "Tags: rotating_light" \
+            -d "${msg}
+
+          ${run_url}" \
+            "https://ntfy.sh/${NTFY_TOPIC}" >/dev/null && echo "ntfy push sent."
