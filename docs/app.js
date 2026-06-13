@@ -30,6 +30,79 @@ const espnNorm = n => ESPN_NAME[n] || n;
 // games), so query an explicit window (yesterday → tomorrow) to always catch the
 // current/live match.
 const ymd = d => d.toISOString().slice(0, 10).replace(/-/g, "");
+let seenEvents = null;   // Set of detail keys already shown (null until first fetch)
+
+function classifyEvent(text) {
+  if (!text) return null;
+  const t = text.toLowerCase();
+  if (t.includes("red card") || t.includes("second yellow") || t.includes("yellow red")) return "red";
+  if (t.includes("yellow card")) return "yellow";
+  if (t.includes("goal") || t.includes("penalty - scored")) return "goal";
+  return null;
+}
+
+let evtQueue = [], evtBusy = false;
+function fireEvent(ev) { evtQueue.push(ev); if (!evtBusy) playNextEvent(); }
+function playNextEvent(hold) {
+  if (!hold && !evtQueue.length) { evtBusy = false; return; }
+  evtBusy = true;
+  const ev = hold || evtQueue.shift();
+  const owner = T.teams[ev.team] ? T.teams[ev.team].owner : null;
+  const ownerColor = owner ? T.owners[owner].color : "#888";
+  const ov = el("div", "evt-ov" + (ev._hold ? " hold" : ""));
+  const card = el("div", "evt-card");
+  const flag = T.teams[ev.team] ? `<img src="${FLAG(T.teams[ev.team].iso)}" alt="">` : "";
+  if (ev.type === "goal") {
+    card.innerHTML = `<div class="evt-big">GOAL!</div>` +
+      `<div class="evt-team">${flag}<span>${ev.team}</span> <span class="evt-score">${ev.score || ""}</span></div>` +
+      (owner ? `<div class="evt-owner"><span class="dot" style="background:${ownerColor}"></span>${owner}'s team</div>` : "") +
+      (ev.player ? `<div class="evt-sub">⚽ ${ev.player}</div>` : "");
+    spawnConfetti(card, ownerColor, ev._hold);
+  } else {
+    const red = ev.type === "red";
+    card.innerHTML = `<div class="evt-cardicon ${ev.type}"></div>` +
+      `<div class="evt-big" style="color:${red ? "var(--down)" : "var(--gold)"}">${red ? "RED" : "YELLOW"} CARD</div>` +
+      `<div class="evt-team">${flag}<span>${ev.team}</span></div>` +
+      (ev.player ? `<div class="evt-sub">${ev.player}</div>` : "");
+  }
+  ov.appendChild(card);
+  document.body.appendChild(ov);
+  if (ev._hold) return;                          // demo: leave it on screen
+  setTimeout(() => { ov.remove(); playNextEvent(); }, 2700);
+}
+function spawnConfetti(container, color, hold) {
+  if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+  const cols = [color || "#ffd24a", "#ffffff", "#5fcf8f", "#ffd24a"];
+  for (let i = 0; i < 26; i++) {
+    const p = el("div", "evt-confetti");
+    const ang = Math.random() * Math.PI * 2, dist = 80 + Math.random() * 240;
+    p.style.setProperty("--tx", (Math.cos(ang) * dist).toFixed(0) + "px");
+    p.style.setProperty("--ty", (Math.sin(ang) * dist * 0.6 + 120).toFixed(0) + "px");
+    p.style.setProperty("--rot", (Math.random() * 720 - 360) + "deg");
+    p.style.background = cols[i % cols.length];
+    if (hold) { p.style.animationDelay = "-0.7s"; p.style.animationPlayState = "paused"; }
+    else p.style.animationDelay = (Math.random() * 0.15) + "s";
+    container.appendChild(p);
+  }
+}
+// poll faster while a match is live so goals/cards feel immediate
+function scheduleLive() {
+  const live = Object.values(liveScores).some(m => m.state === "in");
+  setTimeout(async () => { await fetchLive(); scheduleLive(); }, live ? 20000 : 60000);
+}
+// demo: ?demo=goal|yellow|red (or ?demo=all) loops the real animation for preview
+function demoEvent(kind) {
+  const samples = {
+    goal: { type: "goal", team: "Spain", player: "Lamine Yamal", score: "2–1" },
+    yellow: { type: "yellow", team: "Argentina", player: "Rodrigo De Paul" },
+    red: { type: "red", team: "Brazil", player: "Casemiro" },
+  };
+  const seq = kind === "all" ? ["goal", "yellow", "red"] : [kind];
+  if (!samples[seq[0]]) return;
+  let i = 0;
+  const loop = () => { fireEvent({ ...samples[seq[i % seq.length]] }); i++; };
+  loop(); setInterval(loop, 3300);
+}
 async function fetchLive() {
   try {
     const now = Date.now();
@@ -37,7 +110,7 @@ async function fetchLive() {
     const r = await fetch(url, { cache: "no-store" });
     if (!r.ok) return;
     const d = await r.json();
-    const next = {};
+    const next = {}, curSeen = new Set(), fresh = [];
     (d.events || []).forEach(ev => {
       const c = (ev.competitions || [])[0]; if (!c) return;
       const cs = c.competitors || [];
@@ -45,10 +118,27 @@ async function fetchLive() {
       if (!home || !away) return;
       const a = espnNorm(home.team.displayName), b = espnNorm(away.team.displayName);
       const w = home.winner ? a : (away.winner ? b : null);   // advancing team (incl. penalties)
-      next[pairKey(a, b)] = { a, b, sa: parseInt(home.score) || 0, sb: parseInt(away.score) || 0,
-                              state: ev.status?.type?.state || "pre", w };
+      const state = ev.status?.type?.state || "pre";
+      const sa = parseInt(home.score) || 0, sb = parseInt(away.score) || 0;
+      next[pairKey(a, b)] = { a, b, sa, sb, state, w };
+      // detect goal/card events from the play-by-play details
+      const byId = {}; cs.forEach(x => byId[x.id] = espnNorm(x.team.displayName));
+      (c.details || []).forEach((p, i) => {
+        const type = classifyEvent(p.type && p.type.text);
+        if (!type) return;
+        const team = byId[p.team && p.team.id] || a;
+        const player = ((p.athletesInvolved || [])[0] || {}).displayName || "";
+        const clock = (p.clock || {}).displayValue || "";
+        const key = (p.id ? "p" + p.id : `${a}|${b}|${clock}|${p.type.text}|${player}|${i}`);
+        curSeen.add(key);
+        if (seenEvents && !seenEvents.has(key) && state !== "pre" && T && T.teams[team])
+          fresh.push({ type, team, player, score: `${sa}–${sb}` });
+      });
     });
     liveScores = next;
+    const first = seenEvents === null;
+    seenEvents = curSeen;
+    if (!first) fresh.forEach(fireEvent);
     if (T) { renderNextMatch(); renderSchedule(); }
   } catch (e) { /* offline / ESPN hiccup — keep last known */ }
 }
@@ -88,6 +178,19 @@ const ownerDot = team => {
 };
 const sumProb = (teams, map) => teams.reduce((s, t) => s + (map[t] ?? 0), 0);
 const seedBadge = team => seed[team] ? `<span class="seed" title="Seed ${seed[team]} of 48">${seed[team]}</span>` : "";
+// ladder-movement chip: ▲ up / ▼ down places (blank when unchanged)
+const moveChip = d => d > 0 ? `<span class="mv up" title="up ${d}">▲${d}</span>`
+  : d < 0 ? `<span class="mv down" title="down ${-d}">▼${-d}</span>` : "";
+// a team's within-group rank change vs ~24h ago (positive = climbed)
+function rankDelta24h(team) {
+  const h = results && results.rankHistory, s = standing[team];
+  if (!h || !h.length || !s) return 0;
+  const target = (results.updated || Date.now() / 1000) - 86400;
+  let base = h[0];
+  for (const e of h) if (e.ts <= target) base = e;
+  const was = base.ranks ? base.ranks[team] : null;
+  return (was == null || s.rank == null) ? 0 : was - s.rank;
+}
 
 /* ---------- standings + knockout projection ---------- */
 // Groups tab orders by odds (the draw view). Real standings live in the Table tab.
@@ -150,7 +253,7 @@ function renderTable() {
       const od = ownerDot(r.team);
       const cls = (r.out ? "out" : "") + (i < 2 ? " qual" : "");
       return `<tr class="${cls}" data-owned="${owned(r.team)}">` +
-        `<td class="pos">${i + 1}</td>` +
+        `<td class="pos">${i + 1}${moveChip(rankDelta24h(r.team))}</td>` +
         `<td class="lt-team"><img src="${FLAG(T.teams[r.team]?.iso)}">` +
         `<span class="lt-nm">${r.team}</span><span class="otag"><span class="dot" style="background:${od.color}"></span>${od.name}</span></td>` +
         `<td>${r.P}</td><td class="hidem">${r.W}</td><td class="hidem">${r.D}</td><td class="hidem">${r.L}</td>` +
@@ -421,14 +524,19 @@ function renderOdds() {
     const ts = T.owners[pl].teams;
     return { pl, p: sumProb(ts, probLatest), pp: prev ? sumProb(ts, probPrev) : null };
   }).sort((a, b) => b.p - a.p);
+  // each slip's rank ~24h ago (from the odds baseline) -> ladder movement
+  const baseRank = {};
+  Object.keys(T.owners).map(pl => ({ pl, pp: sumProb(T.owners[pl].teams, probPrev) }))
+    .sort((a, b) => b.pp - a.pp).forEach((r, i) => baseRank[r.pl] = i + 1);
   const pb = $("#playerTable tbody"); pb.innerHTML = "";
   players.forEach((r, i) => {
     const mv = r.pp == null ? { cls: "flat", txt: "·" } : arrow((r.p - r.pp) * 100);
+    const md = baseRank[r.pl] ? baseRank[r.pl] - (i + 1) : 0;
     const color = T.owners[r.pl].color;
     const tr = el("tr"); tr.dataset.owned = selectedOwners.size && selectedOwners.has(r.pl) ? 1 : 0;
     if (shownPlayer[r.pl] != null && Math.abs(r.p - shownPlayer[r.pl]) > 1e-6) tr.className = "flash";
     shownPlayer[r.pl] = r.p;
-    tr.innerHTML = `<td class="rank">${i + 1}</td>` +
+    tr.innerHTML = `<td class="rank">${i + 1}${moveChip(md)}</td>` +
       `<td><span class="team"><span class="odot" style="background:${color}"></span>${r.pl}</span></td>` +
       `<td class="wp">${(r.p * 100).toFixed(1)}%</td><td class="delta ${mv.cls}">${mv.txt}</td>`;
     pb.appendChild(tr);
@@ -690,7 +798,7 @@ async function load() {
   try { initTabs(); applyDeepLink(); initInfo(); } catch (e) { /* keep going even if a control is missing */ }
   let started = false;
   const start = () => load()
-    .then(() => { if (!started) { started = true; setInterval(tick, 1000); fetchLive(); setInterval(fetchLive, 60000); if (location.hash === "#tour") setTimeout(startTour, 300); } })
+    .then(() => { if (!started) { started = true; setInterval(tick, 1000); fetchLive(); scheduleLive(); if (location.hash === "#tour") setTimeout(startTour, 300); const dm = new URLSearchParams(location.search).get("demo"); if (dm) setTimeout(() => demoEvent(dm), 300); } })
     .catch(err => {
       console.error(err);
       const n = document.getElementById("nextmatch");

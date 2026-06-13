@@ -117,7 +117,19 @@ def main():
             "w": win,
         })
 
-    data = {"updated": int(dt.datetime.now().timestamp()), "groups": groups, "matches": matches}
+    # rolling ~30h history of each team's within-group rank, so the frontend can
+    # show 24h ladder movement (ESPN's own rankChange is always 0 for this comp)
+    nowts = int(dt.datetime.now().timestamp())
+    ranks = {r["team"]: r["rank"] for g in groups.values() for r in g}
+    try:
+        with open(OUT) as f:
+            hist = json.load(f).get("rankHistory", [])
+    except Exception:
+        hist = []
+    hist.append({"ts": nowts, "ranks": ranks})
+    hist = [h for h in hist if h.get("ts", 0) >= nowts - 30 * 3600]
+
+    data = {"updated": nowts, "groups": groups, "matches": matches, "rankHistory": hist}
     os.makedirs(os.path.dirname(OUT), exist_ok=True)
     with open(OUT, "w") as f:
         json.dump(data, f, ensure_ascii=False)
