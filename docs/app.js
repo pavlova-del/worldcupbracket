@@ -4,7 +4,7 @@ const REFRESH_MS = 60000;
 const FLAG = iso => `https://flagcdn.com/w40/${iso}.png`;
 // Live data is served by the Raspberry Pi (always-on, home AU IP). Set DATA_API
 // to the Pi's public URL to read live; empty = use the committed Pages snapshot.
-const DATA_API = "";
+const DATA_API = "https://vulcan.tailee0fb5.ts.net";
 const DYNAMIC = new Set(["odds_latest.json", "odds_prev.json", "odds_history.json", "fixtures.json", "results.json"]);
 let piLive = false;   // did the dynamic data load from the Pi this refresh?
 
