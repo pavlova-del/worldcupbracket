@@ -234,11 +234,6 @@ function sparkline(series, opts) {
     `<circle cx="${X(n - 1).toFixed(1)}" cy="${Y(vs[n - 1]).toFixed(1)}" r="1.6" fill="${col}"/></svg>`;
 }
 
-// thin proportional win% bar under a value cell (scaled to the leader = full width)
-function wbar(p, max) {
-  const w = Math.max(0, Math.min(100, (p / (max || 1)) * 100));
-  return `<span class="wbar"><i style="width:${w.toFixed(0)}%"></i></span>`;
-}
 function teamMove(team) {
   if (probPrev[team] == null) return { cls: "flat", txt: "·" };
   return arrow(((probLatest[team] ?? 0) - probPrev[team]) * 100);
@@ -320,18 +315,24 @@ function renderTable() {
     v.innerHTML = "<p class='emptynote'>Group tables appear once the tournament is under way.</p>";
     return;
   }
-  Object.keys(results.groups).sort().forEach(L => {
+  // Teams stay in a fixed (draw) order so the table never reshuffles as results
+  // change; the live standing is conveyed by the position number, the ▲▼ chip,
+  // and the qualification highlight instead.
+  Object.keys(T.groups).sort().forEach(L => {
     const card = el("div", "ltcard", `<h3>Group ${L}</h3>`);
-    const body = results.groups[L].map((r, i) => {
-      const od = ownerDot(r.team);
-      const cls = (r.out ? "out" : "") + (i < 2 ? " qual" : "");
-      return `<tr class="${cls}" data-owned="${owned(r.team)}">` +
-        `<td class="pos">${i + 1}${moveChip(rankDelta24h(r.team))}</td>` +
-        `<td class="lt-team"><img src="${FLAG(T.teams[r.team]?.iso)}">` +
-        `<span class="lt-nm">${r.team}</span><span class="otag"><span class="dot" style="background:${od.color}"></span>${od.name}</span></td>` +
-        `<td>${r.P}</td><td class="hidem">${r.W}</td><td class="hidem">${r.D}</td><td class="hidem">${r.L}</td>` +
-        `<td class="hidem">${r.GF}</td><td class="hidem">${r.GA}</td>` +
-        `<td>${r.GD > 0 ? "+" + r.GD : r.GD}</td><td class="pts">${r.Pts}</td></tr>`;
+    const body = T.groups[L].map(team => {
+      const r = standing[team] || {};
+      const od = ownerDot(team);
+      const pos = r.rank || 0;
+      const gd = r.GD || 0;
+      const cls = (r.out ? "out" : "") + (pos === 1 || pos === 2 ? " qual" : "");
+      return `<tr class="${cls}" data-owned="${owned(team)}">` +
+        `<td class="pos">${pos || "–"}${moveChip(rankDelta24h(team))}</td>` +
+        `<td class="lt-team"><img src="${FLAG(T.teams[team]?.iso)}">` +
+        `<span class="lt-nm">${team}</span><span class="otag"><span class="dot" style="background:${od.color}"></span>${od.name}</span></td>` +
+        `<td>${r.P || 0}</td><td class="hidem">${r.W || 0}</td><td class="hidem">${r.D || 0}</td><td class="hidem">${r.L || 0}</td>` +
+        `<td class="hidem">${r.GF || 0}</td><td class="hidem">${r.GA || 0}</td>` +
+        `<td>${gd > 0 ? "+" + gd : gd}</td><td class="pts">${r.Pts || 0}</td></tr>`;
     }).join("");
     card.innerHTML +=
       `<table class="ltable"><thead><tr>` +
@@ -579,7 +580,6 @@ function renderSchedule() {
 function renderOdds() {
   // teams
   const teams = Object.keys(probLatest).filter(t => T.teams[t]).sort((a, b) => probLatest[b] - probLatest[a]);
-  const maxTeamP = teams.length ? (probLatest[teams[0]] || 1) : 1;
   const tb = $("#teamTable tbody"); tb.innerHTML = "";
   teams.forEach((t, i) => {
     const od = ownerDot(t), mv = teamMove(t), p = probLatest[t] ?? 0;
@@ -590,7 +590,7 @@ function renderOdds() {
     tr.innerHTML = `<td class="rank">${i + 1}</td>` +
       `<td><span class="team"><img src="${FLAG(T.teams[t].iso)}"><span class="odot" style="background:${od.color}" title="${od.name}"></span>${t}</span></td>` +
       `<td class="sparkcell">${sparkline(probSeries[t])}</td>` +
-      `<td class="wp">${pct(t)}${wbar(p, maxTeamP)}</td><td class="delta ${mv.cls}">${mv.txt}</td>`;
+      `<td class="wp">${pct(t)}</td><td class="delta ${mv.cls}">${mv.txt}</td>`;
     tb.appendChild(tr);
   });
 
@@ -603,7 +603,6 @@ function renderOdds() {
   const baseRank = {};
   Object.keys(T.owners).map(pl => ({ pl, pp: sumProb(T.owners[pl].teams, probPrev) }))
     .sort((a, b) => b.pp - a.pp).forEach((r, i) => baseRank[r.pl] = i + 1);
-  const maxSlipP = players.length ? (players[0].p || 1) : 1;
   const pb = $("#playerTable tbody"); pb.innerHTML = "";
   players.forEach((r, i) => {
     const mv = r.pp == null ? { cls: "flat", txt: "·" } : arrow((r.p - r.pp) * 100);
@@ -619,7 +618,8 @@ function renderOdds() {
     tr.innerHTML = `<td class="rank">${i + 1}${moveChip(md)}</td>` +
       `<td><div class="slip"><span class="team"><span class="odot" style="background:${color}"></span>${r.pl}</span>` +
       `<span class="sliptms">${flags}</span></div></td>` +
-      `<td class="wp">${(r.p * 100).toFixed(1)}%${wbar(r.p, maxSlipP)}</td><td class="delta ${mv.cls}">${mv.txt}</td>`;
+      `<td class="sparkcell">${sparkline(slipSeries[r.pl])}</td>` +
+      `<td class="wp">${(r.p * 100).toFixed(1)}%</td><td class="delta ${mv.cls}">${mv.txt}</td>`;
     pb.appendChild(tr);
   });
 
@@ -630,9 +630,6 @@ function renderOdds() {
   $("#playerTable").classList.toggle("hidden", oddsTab !== "players");
   $("#moversView").classList.toggle("hidden", oddsTab !== "movers");
   $("#movers").classList.toggle("hidden", oddsTab === "movers");
-  $(".otitle").textContent = oddsTab === "teams" ? "live · to win the cup"
-    : oddsTab === "players" ? "live · combined slip odds"
-    : "biggest movers · whole tournament";
 
   // 24h movers summary line (Teams / Player slips tabs)
   if (oddsTab !== "movers") {

@@ -34,8 +34,6 @@ body {
 .ltable .pos { color:var(--dim); width:22px; text-align:center; }
 .ltable .pts { font-weight:800; color:var(--gold); }
 .ltable .lt-team { text-align:left; }
-/* dashed line at the top-2 qualification cut-off */
-.ltable tbody tr:nth-child(2) td { border-bottom:1px dashed rgba(95,207,143,.4); }
 .lt-team { display:flex; align-items:center; gap:7px; min-width:0; }
 .lt-team img { width:22px; height:15px; border-radius:2px; object-fit:cover; flex:none; }
 .lt-nm { font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
@@ -289,7 +287,6 @@ main { display:flex; flex:1; gap:14px; padding:14px 20px 20px; min-height:0; }
   margin:0 0 8px; padding:14px 0 8px; }
 .otab { background:var(--panel2); color:var(--dim); border:1px solid var(--line); border-radius:7px; padding:4px 10px; font-weight:700; cursor:pointer; font-size:12px; }
 .otab.active { color:#08231a; background:var(--gold); border-color:var(--gold); }
-.otitle { margin-left:auto; color:var(--dim); font-size:10.5px; }
 .movers { font-size:11px; color:var(--dim); margin-bottom:8px; line-height:1.5; }
 .movers b { color:var(--ink); }
 .otable { width:100%; border-collapse:collapse; font-size:13px; }
@@ -302,12 +299,7 @@ main { display:flex; flex:1; gap:14px; padding:14px 20px 20px; min-height:0; }
 .otable .odot { width:9px; height:9px; border-radius:50%; flex:none; }
 .otable td { vertical-align:middle; }
 .otable .rank, .otable .wp, .otable .delta { font-variant-numeric:tabular-nums; }
-.otable .wp { font-weight:700; text-align:right; position:relative; white-space:nowrap; padding-bottom:9px; }
-
-/* thin proportional win% bar under the value (leader = full width) */
-.wbar { position:absolute; left:6px; right:6px; bottom:3px; height:2px; border-radius:2px; background:rgba(255,255,255,.07); overflow:hidden; }
-.wbar i { display:block; height:100%; background:var(--gold); opacity:.5; border-radius:2px; }
-.otable tr.out .wbar i { background:var(--dim); }
+.otable .wp { font-weight:700; text-align:right; white-space:nowrap; }
 
 /* ---- odds-drift sparklines ---- */
 .otable th.sparkh { text-align:center; font-size:10px; color:var(--dim); font-weight:600; }
