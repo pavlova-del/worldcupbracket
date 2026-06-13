@@ -7,6 +7,10 @@ const FLAG = iso => `https://flagcdn.com/w40/${iso}.png`;
 const DATA_API = "https://vulcan.tailee0fb5.ts.net";
 const DYNAMIC = new Set(["odds_latest.json", "odds_prev.json", "odds_history.json", "fixtures.json", "results.json"]);
 let piLive = false;   // did the dynamic data load from the Pi this refresh?
+// the Pi scrapes every ~60s; if the latest snapshot is older than this the data
+// is being served but not refreshing (e.g. Sportsbet started blocking) — flag it.
+const STALE_SECS = 360;
+let ageOverride = null;   // ?age=<secs> preview hook for the freshness footer
 
 // bracket geometry (px)
 const H = 64, HEADER_H = 28, MATCHW = 170, HGAP = 40, COLW = MATCHW + HGAP;
@@ -14,10 +18,13 @@ const ROUND_COL = { R32: 0, R16: 1, QF: 2, SF: 3, Final: 4 };
 
 let T = null;
 let latest = null, prev = null;
+let history = [];                         // [{ts, winner:{team:odds}}] hourly
+let probSeries = {}, slipSeries = {};     // team/owner -> [{ts, v:prob}] over history
 let probLatest = {}, probPrev = {};
 let selectedOwners = new Set();
 let view = "groups";
 let oddsTab = "teams";
+let moversTab = "teams";   // Teams / Player slips sub-toggle within the Movers tab
 let schedMode = "fixtures";
 let nextRefreshAt = 0;
 let shownTeam = {}, shownPlayer = {};   // last-rendered values, to flash on change
@@ -179,6 +186,58 @@ function arrow(d) {
   if (d > 0.05) return { cls: "up", txt: `▲${d.toFixed(1)}` };
   if (d < -0.05) return { cls: "down", txt: `▼${Math.abs(d).toFixed(1)}` };
   return { cls: "flat", txt: "·" };
+}
+
+// human "x ago" for the freshness footer
+function ago(sec) {
+  sec = Math.max(0, Math.round(sec));
+  if (sec < 60) return "just now";
+  if (sec < 3600) return `${Math.round(sec / 60)}m ago`;
+  if (sec < 86400) return `${Math.round(sec / 3600)}h ago`;
+  return `${Math.round(sec / 86400)}d ago`;
+}
+
+// turn the hourly odds_history into per-team and per-slip probability series,
+// ending on the live snapshot so a sparkline runs right up to "now".
+function buildSeries() {
+  probSeries = {}; slipSeries = {};
+  const pts = (history || []).filter(h => h && h.winner).map(h => ({ ts: h.ts, p: fairProbs(h.winner) }));
+  if (latest && latest.winner && (!pts.length || pts[pts.length - 1].ts < latest.timestamp))
+    pts.push({ ts: latest.timestamp, p: probLatest });
+  if (pts.length < 2) return;
+  const teams = new Set();
+  pts.forEach(pt => Object.keys(pt.p).forEach(t => teams.add(t)));
+  teams.forEach(t => probSeries[t] = pts.map(pt => ({ ts: pt.ts, v: pt.p[t] ?? 0 })));
+  Object.keys(T.owners).forEach(o => {
+    const ts = T.owners[o].teams;
+    slipSeries[o] = pts.map(pt => ({ ts: pt.ts, v: ts.reduce((s, t) => s + (pt.p[t] ?? 0), 0) }));
+  });
+}
+
+// tiny inline-SVG sparkline; auto-scales to the series' own min/max so flat-ish
+// lines still show shape. Green if it ends higher than it started, else red.
+function sparkline(series, opts) {
+  if (!series || series.length < 2) return "";
+  opts = opts || {};
+  const w = opts.w || 46, h = opts.h || 14, pad = 1.6;
+  const vs = series.map(p => p.v);
+  let lo = Math.min(...vs), hi = Math.max(...vs);
+  if (hi - lo < 1e-9) { lo -= 1e-6; hi += 1e-6; }
+  const n = series.length;
+  const X = i => pad + (w - 2 * pad) * (i / (n - 1));
+  const Y = v => pad + (h - 2 * pad) * (1 - (v - lo) / (hi - lo));
+  const d = series.map((p, i) => `${i ? "L" : "M"}${X(i).toFixed(1)} ${Y(p.v).toFixed(1)}`).join(" ");
+  const up = vs[n - 1] >= vs[0];
+  const col = up ? "var(--up)" : "var(--down)";
+  return `<svg class="spark" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" aria-hidden="true">` +
+    `<path d="${d}" fill="none" stroke="${col}" stroke-width="1.3" stroke-linejoin="round" stroke-linecap="round"/>` +
+    `<circle cx="${X(n - 1).toFixed(1)}" cy="${Y(vs[n - 1]).toFixed(1)}" r="1.6" fill="${col}"/></svg>`;
+}
+
+// thin proportional win% bar under a value cell (scaled to the leader = full width)
+function wbar(p, max) {
+  const w = Math.max(0, Math.min(100, (p / (max || 1)) * 100));
+  return `<span class="wbar"><i style="width:${w.toFixed(0)}%"></i></span>`;
 }
 function teamMove(team) {
   if (probPrev[team] == null) return { cls: "flat", txt: "·" };
@@ -520,6 +579,7 @@ function renderSchedule() {
 function renderOdds() {
   // teams
   const teams = Object.keys(probLatest).filter(t => T.teams[t]).sort((a, b) => probLatest[b] - probLatest[a]);
+  const maxTeamP = teams.length ? (probLatest[teams[0]] || 1) : 1;
   const tb = $("#teamTable tbody"); tb.innerHTML = "";
   teams.forEach((t, i) => {
     const od = ownerDot(t), mv = teamMove(t), p = probLatest[t] ?? 0;
@@ -529,7 +589,8 @@ function renderOdds() {
     shownTeam[t] = p;
     tr.innerHTML = `<td class="rank">${i + 1}</td>` +
       `<td><span class="team"><img src="${FLAG(T.teams[t].iso)}"><span class="odot" style="background:${od.color}" title="${od.name}"></span>${t}</span></td>` +
-      `<td class="wp">${pct(t)}</td><td class="delta ${mv.cls}">${mv.txt}</td>`;
+      `<td class="sparkcell">${sparkline(probSeries[t])}</td>` +
+      `<td class="wp">${pct(t)}${wbar(p, maxTeamP)}</td><td class="delta ${mv.cls}">${mv.txt}</td>`;
     tb.appendChild(tr);
   });
 
@@ -542,6 +603,7 @@ function renderOdds() {
   const baseRank = {};
   Object.keys(T.owners).map(pl => ({ pl, pp: sumProb(T.owners[pl].teams, probPrev) }))
     .sort((a, b) => b.pp - a.pp).forEach((r, i) => baseRank[r.pl] = i + 1);
+  const maxSlipP = players.length ? (players[0].p || 1) : 1;
   const pb = $("#playerTable tbody"); pb.innerHTML = "";
   players.forEach((r, i) => {
     const mv = r.pp == null ? { cls: "flat", txt: "·" } : arrow((r.p - r.pp) * 100);
@@ -550,25 +612,79 @@ function renderOdds() {
     const tr = el("tr"); tr.dataset.owned = selectedOwners.size && selectedOwners.has(r.pl) ? 1 : 0;
     if (shownPlayer[r.pl] != null && Math.abs(r.p - shownPlayer[r.pl]) > 1e-6) tr.className = "flash";
     shownPlayer[r.pl] = r.p;
+    const flags = T.owners[r.pl].teams.map(tm => {
+      const out = standing[tm] && standing[tm].out;
+      return `<img class="${out ? "tmout" : ""}" src="${FLAG(T.teams[tm].iso)}" title="${tm}${out ? " · out" : ""}" alt="">`;
+    }).join("");
     tr.innerHTML = `<td class="rank">${i + 1}${moveChip(md)}</td>` +
-      `<td><span class="team"><span class="odot" style="background:${color}"></span>${r.pl}</span></td>` +
-      `<td class="wp">${(r.p * 100).toFixed(1)}%</td><td class="delta ${mv.cls}">${mv.txt}</td>`;
+      `<td><div class="slip"><span class="team"><span class="odot" style="background:${color}"></span>${r.pl}</span>` +
+      `<span class="sliptms">${flags}</span></div></td>` +
+      `<td class="wp">${(r.p * 100).toFixed(1)}%${wbar(r.p, maxSlipP)}</td><td class="delta ${mv.cls}">${mv.txt}</td>`;
     pb.appendChild(tr);
   });
 
-  // movers + tab visibility
+  renderMoversView();
+
+  // tab visibility
   $("#teamTable").classList.toggle("hidden", oddsTab !== "teams");
   $("#playerTable").classList.toggle("hidden", oddsTab !== "players");
-  $(".otitle").textContent = oddsTab === "teams" ? "live · to win the cup" : "live · combined slip odds";
-  if (oddsTab === "teams") {
-    const mv = teams.map(t => ({ n: t, d: (probLatest[t] - (probPrev[t] ?? probLatest[t])) * 100 }))
-      .filter(m => Math.abs(m.d) > 0.05).sort((a, b) => Math.abs(b.d) - Math.abs(a.d)).slice(0, 3);
-    $("#movers").innerHTML = mv.length ? "Movers: " + mv.map(m => `<b>${m.n}</b> <span class="${m.d > 0 ? "up" : "down"}">${m.d > 0 ? "▲" : "▼"}${Math.abs(m.d).toFixed(1)}</span>`).join(" · ") : "No movement in the last 24h.";
-  } else {
-    const mv = players.map(r => ({ n: r.pl, d: r.pp == null ? 0 : (r.p - r.pp) * 100 }))
-      .filter(m => Math.abs(m.d) > 0.05).sort((a, b) => Math.abs(b.d) - Math.abs(a.d)).slice(0, 3);
+  $("#moversView").classList.toggle("hidden", oddsTab !== "movers");
+  $("#movers").classList.toggle("hidden", oddsTab === "movers");
+  $(".otitle").textContent = oddsTab === "teams" ? "live · to win the cup"
+    : oddsTab === "players" ? "live · combined slip odds"
+    : "biggest movers · whole tournament";
+
+  // 24h movers summary line (Teams / Player slips tabs)
+  if (oddsTab !== "movers") {
+    const src = oddsTab === "teams"
+      ? teams.map(t => ({ n: t, d: (probLatest[t] - (probPrev[t] ?? probLatest[t])) * 100 }))
+      : players.map(r => ({ n: r.pl, d: r.pp == null ? 0 : (r.p - r.pp) * 100 }));
+    const mv = src.filter(m => Math.abs(m.d) > 0.05).sort((a, b) => Math.abs(b.d) - Math.abs(a.d)).slice(0, 3);
     $("#movers").innerHTML = mv.length ? "Movers: " + mv.map(m => `<b>${m.n}</b> <span class="${m.d > 0 ? "up" : "down"}">${m.d > 0 ? "▲" : "▼"}${Math.abs(m.d).toFixed(1)}</span>`).join(" · ") : "No movement in the last 24h.";
   }
+}
+
+// "biggest movers of the tournament" — change in win% from the start of the
+// retained history to now, with a sparkline showing the path. Toggle between
+// Teams and Player slips; each shows the top risers + fallers.
+function renderMoversView() {
+  const v = $("#moversView"); if (!v) return;
+  const teamsMode = moversTab !== "players";
+  const src = teamsMode ? probSeries : slipSeries;
+  const keys = teamsMode ? Object.keys(src).filter(t => T.teams[t]) : Object.keys(T.owners);
+  const arr = keys.map(k => {
+    const s = src[k]; if (!s || s.length < 2) return null;
+    return { k, a: s[0].v, b: s[s.length - 1].v, d: (s[s.length - 1].v - s[0].v) * 100, s };
+  }).filter(Boolean);
+  const span = history.length ? (latest.timestamp - history[0].ts) : 0;
+  const since = span > 0 ? `over the last ${ago(span).replace(" ago", "")}` : "so far";
+  const tabs = `<div class="mvtabs">` +
+    [["teams", "Teams"], ["players", "Player slips"]].map(([m, l]) =>
+      `<button class="mvtab${moversTab === m ? " active" : ""}" data-mvtab="${m}">${l}</button>`).join("") +
+    `</div>`;
+  if (!arr.length || arr.every(m => Math.abs(m.d) < 0.05)) {
+    v.innerHTML = tabs + `<p class='emptynote'>Odds have barely shifted ${since}. Biggest movers will appear here once prices start swinging — usually mid group-stage.</p>`;
+    return wireMoversTabs(v);
+  }
+  const risers = arr.filter(m => m.d > 0.05).sort((x, y) => y.d - x.d).slice(0, 6);
+  const fallers = arr.filter(m => m.d < -0.05).sort((x, y) => x.d - y.d).slice(0, 6);
+  const icon = m => teamsMode
+    ? `<img src="${FLAG(T.teams[m.k].iso)}" alt="">`
+    : `<span class="mvdot" style="background:${T.owners[m.k].color}"></span>`;
+  const ownedM = m => teamsMode ? owned(m.k) : (selectedOwners.size && selectedOwners.has(m.k) ? 1 : 0);
+  const row = m => `<div class="mvrow" data-owned="${ownedM(m)}">` + icon(m) +
+    `<span class="mvteam"><span class="mvnm">${m.k}</span>` +
+    `<span class="mvsub">${(m.a * 100).toFixed(1)}<span class="arrowto">→</span>${(m.b * 100).toFixed(1)}%</span></span>` +
+    `<span class="mvspark">${sparkline(m.s, { w: 62, h: 18 })}</span>` +
+    `<span class="mvdelta ${m.d > 0 ? "up" : "down"}">${m.d > 0 ? "▲" : "▼"}${Math.abs(m.d).toFixed(1)}</span></div>`;
+  const grp = (cls, label, rows) => `<div class="mvgroup"><h4 class="${cls}">${label}</h4>` +
+    (rows.length ? rows.map(row).join("") : "<p class='emptynote'>None yet.</p>") + "</div>";
+  v.innerHTML = tabs + `<div class="mvcap">Change in win% ${since}</div>` +
+    grp("up", "▲ Shortened most", risers) + grp("down", "▼ Drifted most", fallers);
+  wireMoversTabs(v);
+}
+function wireMoversTabs(v) {
+  v.querySelectorAll(".mvtab").forEach(b => b.onclick = () => { moversTab = b.dataset.mvtab; renderMoversView(); });
 }
 
 /* ---------- next match box ---------- */
@@ -614,15 +730,28 @@ function renderNextMatch() {
 
 function renderStatus() {
   if (!latest) return;
+  $("#legend").textContent = "▲ shortening · ▼ drifting (last 24h)";
+}
+
+// subtle freshness footer in the odds panel. Catches the blind spot where the Pi
+// serves a frozen file (Sportsbet blocked): the data still loads "live" but stops
+// advancing, so we surface its age — dim when fresh, amber when stale, red offline.
+function renderFreshness() {
+  const foot = $("#dataFoot"); if (!foot || !latest) return;
   const offline = DATA_API && !piLive;
-  $("#legend").textContent = offline
-    ? "▲▼ last 24h · ⚠ live data offline — showing last snapshot"
-    : "▲ shortening · ▼ drifting (last 24h)";
+  const age = ageOverride != null ? ageOverride : Math.max(0, Date.now() / 1000 - (latest.timestamp || 0));
+  const stale = !offline && age > STALE_SECS;
+  foot.classList.toggle("offline", offline);
+  foot.classList.toggle("stale", stale);
+  const txt = offline
+    ? `live data offline · showing last snapshot (${ago(age)})`
+    : `odds updated ${ago(age)}`;
+  foot.innerHTML = `<span class="fdot"></span><span class="ftxt">${txt}</span>`;
 }
 
 function renderAll() {
   document.body.classList.toggle("filtering", selectedOwners.size > 0);
-  renderOwners(); renderStatus(); renderNextMatch(); renderGroups(); renderTable(); renderKnockout(); renderSchedule(); renderOdds();
+  renderOwners(); renderStatus(); renderFreshness(); renderNextMatch(); renderGroups(); renderTable(); renderKnockout(); renderSchedule(); renderOdds();
 }
 
 /* ---------- load + poll ---------- */
@@ -633,6 +762,7 @@ async function refresh() {
   try { results = await getJSON("data/results.json"); } catch { results = null; }
   let hist = null;
   try { hist = await getJSON("data/odds_history.json"); } catch { hist = null; }
+  history = (hist && hist.length) ? hist.filter(h => h && h.winner) : [];
   probLatest = fairProbs(latest.winner);
   // delta baseline = odds as of ~24h ago (so movement stays visible for a day);
   // fall back to the oldest history entry, then to the previous snapshot
@@ -651,6 +781,7 @@ async function refresh() {
     for (const L in results.groups) results.groups[L].forEach(r => standing[r.team] = r);
     (results.matches || []).forEach(m => { matchScore[pairKey(m.a, m.b)] = m; });
   }
+  buildSeries();
   nextRefreshAt = Date.now() + REFRESH_MS;
   renderAll();
 }
@@ -787,7 +918,7 @@ function endTour() {
 
 function tick() {
   if (!latest) return;
-  renderStatus(); renderNextMatch();
+  renderStatus(); renderFreshness(); renderNextMatch();
   if (Date.now() >= nextRefreshAt) refresh().catch(console.error);
 }
 
@@ -798,8 +929,11 @@ function applyDeepLink() {
   const views = ["groups", "table", "knockout", "schedule"];
   if (views.includes(qv)) view = qv;
   else if (views.includes(hv)) view = hv;
-  if (q.get("tab") === "players") oddsTab = "players";
+  if (["players", "movers"].includes(q.get("tab"))) oddsTab = q.get("tab");
   if (q.get("sched") === "results") schedMode = "results";
+  // ?age=<secs> previews the freshness footer (fresh/stale) without waiting
+  const ageQ = parseInt(q.get("age"), 10);
+  if (!Number.isNaN(ageQ)) ageOverride = ageQ;
   (q.get("owner") || "").split(",").map(s => s.trim()).filter(Boolean).forEach(o => selectedOwners.add(o));
 }
 

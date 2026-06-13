@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>World Cup 2026 · Sweepstake Tracker</title>
-  <link rel="stylesheet" href="styles.css?v=20260612p" />
+  <link rel="stylesheet" href="styles.css?v=20260613a" />
 </head>
 <body>
   <header id="topbar">
@@ -37,20 +37,23 @@
       <div class="otabs">
         <button class="otab active" data-otab="teams">Teams</button>
         <button class="otab" data-otab="players">Player slips</button>
+        <button class="otab" data-otab="movers">Movers</button>
         <span class="otitle">live · to win the cup</span>
       </div>
       <div id="movers" class="movers"></div>
       <table id="teamTable" class="otable">
-        <thead><tr><th>Seed</th><th>Team</th><th>Win</th><th>±</th></tr></thead>
+        <thead><tr><th>Seed</th><th>Team</th><th class="sparkh">Trend</th><th>Win</th><th>±</th></tr></thead>
         <tbody></tbody>
       </table>
       <table id="playerTable" class="otable hidden">
         <thead><tr><th>#</th><th>Player slip</th><th>Win</th><th>±</th></tr></thead>
         <tbody></tbody>
       </table>
+      <div id="moversView" class="moversview hidden"></div>
+      <div id="dataFoot" class="datafoot" aria-live="polite"></div>
     </aside>
   </main>
 
-  <script src="app.js?v=20260612p"></script>
+  <script src="app.js?v=20260613a"></script>
 </body>
 </html>

@@ -300,7 +300,59 @@ main { display:flex; flex:1; gap:14px; padding:14px 20px 20px; min-height:0; }
 .otable .team { display:flex; align-items:center; gap:7px; }
 .otable img { width:22px; height:15px; border-radius:2px; object-fit:cover; }
 .otable .odot { width:9px; height:9px; border-radius:50%; flex:none; }
-.otable .wp { font-weight:700; text-align:right; }
+.otable td { vertical-align:middle; }
+.otable .rank, .otable .wp, .otable .delta { font-variant-numeric:tabular-nums; }
+.otable .wp { font-weight:700; text-align:right; position:relative; white-space:nowrap; padding-bottom:9px; }
+
+/* thin proportional win% bar under the value (leader = full width) */
+.wbar { position:absolute; left:6px; right:6px; bottom:3px; height:2px; border-radius:2px; background:rgba(255,255,255,.07); overflow:hidden; }
+.wbar i { display:block; height:100%; background:var(--gold); opacity:.5; border-radius:2px; }
+.otable tr.out .wbar i { background:var(--dim); }
+
+/* ---- odds-drift sparklines ---- */
+.otable th.sparkh { text-align:center; font-size:10px; color:var(--dim); font-weight:600; }
+.otable .sparkcell { width:50px; padding:4px 6px 4px 2px; text-align:center; }
+.spark { display:inline-block; vertical-align:middle; opacity:.92; }
+.otable .sparkcell .spark { width:46px; height:14px; }
+
+/* ---- player-slip team flags ---- */
+.slip { display:flex; flex-direction:column; gap:4px; min-width:0; }
+.sliptms { display:flex; gap:3px; }
+.sliptms img { width:18px; height:12px; border-radius:2px; object-fit:cover; box-shadow:0 0 0 1px rgba(0,0,0,.35); }
+.sliptms img.tmout { filter:grayscale(1); opacity:.4; }
+
+/* ---- biggest movers (whole tournament) ---- */
+.moversview { padding-top:2px; }
+.moversview.hidden { display:none; }
+.mvtabs { display:flex; gap:6px; margin:2px 0 10px; }
+.mvtab { background:var(--panel2); color:var(--dim); border:1px solid var(--line); border-radius:7px; padding:4px 11px; font-weight:700; cursor:pointer; font-size:11.5px; }
+.mvtab.active { color:#08231a; background:var(--gold); border-color:var(--gold); }
+.mvcap { color:var(--dim); font-size:10.5px; margin:0 0 9px; }
+.mvgroup { margin-bottom:15px; }
+.mvgroup h4 { margin:0 0 7px; font-size:11.5px; letter-spacing:.3px; font-weight:800; padding-bottom:5px; border-bottom:1px solid var(--line); }
+.mvgroup h4.up { color:var(--up); }
+.mvgroup h4.down { color:var(--down); }
+.mvrow { display:grid; grid-template-columns:22px minmax(0,1fr) 62px auto; align-items:center; gap:9px; padding:7px 2px; border-radius:7px; }
+.mvrow + .mvrow { border-top:1px solid rgba(255,255,255,.05); }
+.mvrow img { width:22px; height:15px; border-radius:2px; object-fit:cover; box-shadow:0 0 0 1px rgba(0,0,0,.4); }
+.mvrow .mvdot { width:13px; height:13px; border-radius:50%; justify-self:center; }
+.mvteam { display:flex; flex-direction:column; min-width:0; }
+.mvnm { font-weight:600; font-size:13px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.mvsub { font-size:10px; color:var(--dim); font-variant-numeric:tabular-nums; }
+.mvsub .arrowto { margin:0 3px; opacity:.7; }
+.mvspark { display:flex; align-items:center; justify-content:center; }
+.mvdelta { font-size:12px; font-weight:800; text-align:right; font-variant-numeric:tabular-nums; }
+
+/* ---- data freshness footer (very subtle, tucked away) ---- */
+.datafoot { display:flex; align-items:center; gap:6px; margin-top:12px; padding-top:9px;
+  border-top:1px solid rgba(255,255,255,.06); font-size:10.5px; color:var(--dim); opacity:.62; }
+.datafoot .fdot { width:6px; height:6px; border-radius:50%; background:var(--up); flex:none; opacity:.8; }
+.datafoot.stale { color:var(--gold); opacity:.9; }
+.datafoot.stale .fdot { background:var(--gold); animation:freshpulse 1.8s ease-in-out infinite; }
+.datafoot.offline { color:var(--down); opacity:.9; }
+.datafoot.offline .fdot { background:var(--down); }
+@keyframes freshpulse { 0%,100%{ opacity:.4; } 50%{ opacity:1; } }
+@media (prefers-reduced-motion:reduce){ .datafoot.stale .fdot { animation:none; } }
 
 /* ---- owner highlight ---- */
 body.filtering [data-owned="0"] { opacity:.28; }
