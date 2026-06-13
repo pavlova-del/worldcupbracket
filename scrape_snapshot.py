@@ -23,6 +23,12 @@ PREV = os.path.join(DATA_DIR, "odds_prev.json")
 FIXTURES = os.path.join(DATA_DIR, "fixtures.json")
 HISTORY = os.path.join(DATA_DIR, "odds_history.json")
 
+# committed seed (Mac-era real snapshots) used to backfill a fresh Pi history
+REPO_DIR = os.path.dirname(os.path.abspath(__file__))
+SEED_HISTORY = os.path.join(REPO_DIR, "docs", "data", "odds_history.json")
+HISTORY_RETAIN_DAYS = 45      # keep the whole tournament so drift stays visible
+HISTORY_BUCKET_SECS = 3600    # downsample to ~1 odds point per hour (bounds size)
+
 # Men's World Cup competition (for the fixtures list with kickoff times)
 COMP_ID = 23109
 COMP_EVENTS_API = f"{sb.BASE}/apigw/sportsbook-sports/Sportsbook/Sports/Competitions/{COMP_ID}/Events"
@@ -55,6 +61,19 @@ def write_fixtures():
     print(f"Wrote {FIXTURES} — {len(fixtures)} fixtures.")
 
 
+def downsample(hist, now):
+    """Keep at most one (the latest) odds point per hour and drop anything older
+    than the retention window. Bounds the file while leaving plenty of resolution
+    for the frontend's 24h-ago baseline, and banks drift across the tournament."""
+    cutoff = now - HISTORY_RETAIN_DAYS * 86400
+    buckets = {}
+    for h in sorted(hist, key=lambda x: x.get("ts", 0)):
+        ts = h.get("ts", 0)
+        if ts >= cutoff and h.get("winner"):
+            buckets[ts // HISTORY_BUCKET_SECS] = h   # later ts in a bucket wins
+    return [buckets[k] for k in sorted(buckets)]
+
+
 def main():
     event_id = sb.discover_event_id()
     markets = sb.fetch(sb.MARKETS_API.format(event_id=event_id), as_json=True)
@@ -81,15 +100,24 @@ def main():
     with open(LATEST, "w") as f:
         json.dump(snapshot, f, ensure_ascii=False)
 
-    # rolling ~26h history of winner odds, so the frontend can show 24h movement
+    # rolling history of winner odds, so the frontend can show 24h movement
     try:
         with open(HISTORY) as f:
             hist = json.load(f)
     except Exception:
         hist = []
+    # while the live history is still thin (e.g. just after the Pi came online),
+    # backfill from the committed Mac-era seed so the 24h baseline works from day
+    # one. Self-limiting: stops once the Pi has ~a day of its own snapshots.
+    span_h = (hist[-1]["ts"] - hist[0]["ts"]) / 3600 if hist else 0
+    if span_h < 24 and os.path.abspath(SEED_HISTORY) != os.path.abspath(HISTORY):
+        try:
+            with open(SEED_HISTORY) as f:
+                hist = json.load(f) + hist
+        except Exception:
+            pass
     hist.append({"ts": snapshot["timestamp"], "winner": snapshot["winner"]})
-    cutoff = snapshot["timestamp"] - 26 * 3600
-    hist = [h for h in hist if h.get("ts", 0) >= cutoff]
+    hist = downsample(hist, snapshot["timestamp"])
     with open(HISTORY, "w") as f:
         json.dump(hist, f, ensure_ascii=False)
 
