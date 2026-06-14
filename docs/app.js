@@ -249,17 +249,6 @@ const seedBadge = team => seed[team] ? `<span class="seed" title="Seed ${seed[te
 // ladder-movement chip: ▲ up / ▼ down places (blank when unchanged)
 const moveChip = d => d > 0 ? `<span class="mv up" title="up ${d}">▲${d}</span>`
   : d < 0 ? `<span class="mv down" title="down ${-d}">▼${-d}</span>` : "";
-// a team's within-group rank change vs ~24h ago (positive = climbed)
-function rankDelta24h(team) {
-  const h = results && results.rankHistory, s = standing[team];
-  if (!h || !h.length || !s) return 0;
-  const target = (results.updated || Date.now() / 1000) - 86400;
-  let base = h[0];
-  for (const e of h) if (e.ts <= target) base = e;
-  const was = base.ranks ? base.ranks[team] : null;
-  return (was == null || s.rank == null) ? 0 : was - s.rank;
-}
-
 /* ---------- standings + knockout projection ---------- */
 // Groups tab orders by odds (the draw view). Real standings live in the Table tab.
 function standings(letter) {
@@ -315,19 +304,19 @@ function renderTable() {
     v.innerHTML = "<p class='emptynote'>Group tables appear once the tournament is under way.</p>";
     return;
   }
-  // Teams stay in a fixed (draw) order so the table never reshuffles as results
-  // change; the live standing is conveyed by the position number, the ▲▼ chip,
-  // and the qualification highlight instead.
+  // Teams reshuffle into live standings order, but with no movement arrows so
+  // every row stays the same height and the group card never changes size.
   Object.keys(T.groups).sort().forEach(L => {
     const card = el("div", "ltcard", `<h3>Group ${L}</h3>`);
-    const body = T.groups[L].map(team => {
+    const teams = [...T.groups[L]].sort((a, b) =>
+      ((standing[a] && standing[a].rank) || 99) - ((standing[b] && standing[b].rank) || 99));
+    const body = teams.map((team, i) => {
       const r = standing[team] || {};
       const od = ownerDot(team);
-      const pos = r.rank || 0;
       const gd = r.GD || 0;
-      const cls = (r.out ? "out" : "") + (pos === 1 || pos === 2 ? " qual" : "");
+      const cls = (r.out ? "out" : "") + (i < 2 ? " qual" : "");
       return `<tr class="${cls}" data-owned="${owned(team)}">` +
-        `<td class="pos">${pos || "–"}${moveChip(rankDelta24h(team))}</td>` +
+        `<td class="pos">${i + 1}</td>` +
         `<td class="lt-team"><img src="${FLAG(T.teams[team]?.iso)}">` +
         `<span class="lt-nm">${team}</span><span class="otag"><span class="dot" style="background:${od.color}"></span>${od.name}</span></td>` +
         `<td>${r.P || 0}</td><td class="hidem">${r.W || 0}</td><td class="hidem">${r.D || 0}</td><td class="hidem">${r.L || 0}</td>` +
