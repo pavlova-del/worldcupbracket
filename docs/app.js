@@ -80,7 +80,7 @@ function playNextEvent(hold) {
   ov.appendChild(card);
   document.body.appendChild(ov);
   if (ev._hold) return;                          // demo: leave it on screen
-  setTimeout(() => { ov.remove(); playNextEvent(); }, 2700);
+  setTimeout(() => { ov.remove(); playNextEvent(); }, 4200);
 }
 function spawnConfetti(container, color, hold) {
   if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;

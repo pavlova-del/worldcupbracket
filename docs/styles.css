@@ -86,9 +86,9 @@ body {
 
 /* ---- live event animation (goal / cards) ---- */
 .evt-ov { position:fixed; inset:0; z-index:95; display:flex; align-items:center; justify-content:center;
-  pointer-events:none; background:rgba(2,6,4,.55); animation:evtDim 2.7s ease forwards; overflow:hidden; }
+  pointer-events:none; background:rgba(2,6,4,.55); animation:evtDim 4.2s ease forwards; overflow:hidden; }
 .evt-ov.hold { animation:none; }
-.evt-card { text-align:center; position:relative; animation:evtIn 2.7s cubic-bezier(.2,.8,.2,1) forwards; }
+.evt-card { text-align:center; position:relative; animation:evtIn 4.2s cubic-bezier(.2,.8,.2,1) forwards; }
 .evt-ov.hold .evt-card { animation:evtPop .5s ease forwards; }
 .evt-big { font-weight:900; font-size:clamp(46px,12vw,108px); letter-spacing:2px; line-height:1;
   color:var(--gold); text-shadow:0 6px 30px rgba(0,0,0,.55); }
@@ -100,7 +100,7 @@ body {
 .evt-owner .dot { width:12px; height:12px; border-radius:50%; }
 .evt-sub { margin-top:6px; color:var(--dim); font-size:14px; }
 .evt-cardicon { width:clamp(58px,13vw,86px); height:clamp(84px,19vw,122px); border-radius:9px; margin:0 auto 16px;
-  box-shadow:0 16px 36px -8px rgba(0,0,0,.7); animation:cardSlam 2.7s cubic-bezier(.2,.8,.2,1) forwards; }
+  box-shadow:0 16px 36px -8px rgba(0,0,0,.7); animation:cardSlam 4.2s cubic-bezier(.2,.8,.2,1) forwards; }
 .evt-ov.hold .evt-cardicon { animation:cardSlamHold .5s ease forwards; }
 .evt-cardicon.yellow { background:linear-gradient(155deg,#ffe06b,#e0a91e); }
 .evt-cardicon.red { background:linear-gradient(155deg,#ff6a5a,#c4271b); }
