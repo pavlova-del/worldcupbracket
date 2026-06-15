@@ -59,6 +59,14 @@ def to_ts(iso):
     return 0
 
 
+def minute_of(clock):
+    """ESPN clock to a comparable minute: "9'" -> 9, "90'+4'" -> 90, junk -> 999."""
+    try:
+        return int(str(clock).split("'")[0].strip())
+    except (ValueError, AttributeError):
+        return 999
+
+
 def main():
     groups = {}
     st = fetch(STANDINGS)
@@ -88,6 +96,10 @@ def main():
             groups[letter] = rows
 
     matches = []
+    # ITP "Duff Pool" prize stats, aggregated over all played matches (see app.js)
+    red, conceded, scored = {}, {}, {}
+    fastest = None    # {team, minute, clock, player}
+    first_og = None   # {team, minute, clock, player, matchTs, against}
     sb = fetch(SCOREBOARD)
     for ev in sb.get("events", []):
         comp = (ev.get("competitions") or [{}])[0]
@@ -101,21 +113,44 @@ def main():
             sa, sbs = int(home.get("score") or 0), int(away.get("score") or 0)
         except ValueError:
             sa, sbs = 0, 0
+        a, b = norm(home["team"]["displayName"]), norm(away["team"]["displayName"])
+        mts = to_ts(ev.get("date", ""))
         # advancing team (handles penalty shootouts) via ESPN's per-competitor winner flag
-        win = None
-        if home.get("winner"):
-            win = norm(home["team"]["displayName"])
-        elif away.get("winner"):
-            win = norm(away["team"]["displayName"])
+        win = a if home.get("winner") else (b if away.get("winner") else None)
         matches.append({
-            "ts": to_ts(ev.get("date", "")),
-            "a": norm(home["team"]["displayName"]),
-            "b": norm(away["team"]["displayName"]),
-            "sa": sa, "sb": sbs,
+            "ts": mts, "a": a, "b": b, "sa": sa, "sb": sbs,
             "state": state,
             "completed": bool(ev.get("status", {}).get("type", {}).get("completed")),
             "w": win,
         })
+
+        # ---- Duff Pool aggregation (played matches only) ----
+        if state == "pre":
+            continue
+        scored[a] = scored.get(a, 0) + sa
+        conceded[a] = conceded.get(a, 0) + sbs
+        scored[b] = scored.get(b, 0) + sbs
+        conceded[b] = conceded.get(b, 0) + sa
+        idname = {c["team"]["id"]: norm(c["team"]["displayName"]) for c in cs if c.get("team")}
+        for p in comp.get("details") or []:
+            tname = idname.get((p.get("team") or {}).get("id"))
+            if not tname:
+                continue
+            clk = (p.get("clock") or {}).get("displayValue")
+            mn = minute_of(clk)
+            player = (p.get("athletesInvolved") or [{}])[0].get("displayName")
+            if p.get("redCard"):
+                red[tname] = red.get(tname, 0) + 1
+            if p.get("ownGoal"):
+                # ESPN's `team` on an own goal is the beneficiary; the team that
+                # committed it is the opponent (the athlete's side).
+                culprit = b if tname == a else (a if tname == b else None)
+                if culprit and (first_og is None or (mts, mn) < (first_og["matchTs"], first_og["minute"])):
+                    first_og = {"team": culprit, "minute": mn, "clock": clk,
+                                "player": player, "matchTs": mts, "against": tname}
+            elif p.get("scoringPlay"):
+                if fastest is None or mn < fastest["minute"]:
+                    fastest = {"team": tname, "minute": mn, "clock": clk, "player": player}
 
     # rolling ~30h history of each team's within-group rank, so the frontend can
     # show 24h ladder movement (ESPN's own rankChange is always 0 for this comp)
@@ -129,7 +164,12 @@ def main():
     hist.append({"ts": nowts, "ranks": ranks})
     hist = [h for h in hist if h.get("ts", 0) >= nowts - 30 * 3600]
 
-    data = {"updated": nowts, "groups": groups, "matches": matches, "rankHistory": hist}
+    prize_stats = {
+        "redCards": red, "conceded": conceded, "scored": scored,
+        "fastestGoal": fastest, "firstOwnGoal": first_og,
+    }
+    data = {"updated": nowts, "groups": groups, "matches": matches,
+            "rankHistory": hist, "prizeStats": prize_stats}
     os.makedirs(os.path.dirname(OUT), exist_ok=True)
     with open(OUT, "w") as f:
         json.dump(data, f, ensure_ascii=False)

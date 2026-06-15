@@ -332,6 +332,88 @@ function renderTable() {
   });
 }
 
+/* ---------- ITP "Duff Pool" prize tracker ----------
+   Renders only when #prizesView + tournament.json `prizes` exist (ITP only); inert
+   elsewhere. Three switchable layouts via ?duff=standings|chalkboard|cans (default
+   standings) for comparison. Leaders come from results.prizeStats + the bracket. */
+function leadersBy(map, worst) {
+  const e = Object.entries(map || {});
+  if (!e.length) return [];
+  const ext = e.reduce((acc, [, v]) => worst ? Math.min(acc, v) : Math.max(acc, v), worst ? Infinity : -Infinity);
+  return e.filter(([, v]) => v === ext);
+}
+const duffOwner = team => (team && T.teams[team] && T.teams[team].owner) || null;
+const ownerCol = o => (o && T.owners[o] && T.owners[o].color) || "#888";
+function teamChip(team, withOwner) {
+  if (!team || !T.teams[team]) return `<span class="dz-tbd">— TBD —</span>`;
+  const o = duffOwner(team);
+  return `<span class="dz-team"><img src="${FLAG(T.teams[team].iso)}" alt="">` +
+    `<span class="dz-tn">${team}</span>` +
+    (withOwner !== false && o ? `<span class="dz-own"><span class="dz-dot" style="background:${ownerCol(o)}"></span>${o}</span>` : "") +
+    `</span>`;
+}
+// resolve each prize category to its current leader(s) + value
+function duffCats() {
+  const ps = (results && results.prizeStats) || {};
+  const con = ps.conceded || {}, sc = ps.scored || {}, gd = {};
+  Object.keys({ ...sc, ...con }).forEach(t => gd[t] = (sc[t] || 0) - (con[t] || 0));
+  let champ = null, runner = null;
+  if (results && T.knockout) {
+    const byId = {}; T.knockout.forEach(m => byId[m.id] = m);
+    const final = byId[104];
+    if (final) {
+      const { slotTeam, matchWinner } = resolveBracket(byId);
+      const w = matchWinner(104);
+      if (w) { const h = slotTeam(final.home, "104-home"), a = slotTeam(final.away, "104-away"); champ = w; runner = (w === h ? a : h); }
+    }
+  }
+  const plural = (n, w) => `${n} ${w}${n === 1 ? "" : "s"}`;
+  const evtVal = f => f ? `${f.clock || f.minute + "'"}${f.player ? " · " + f.player : ""}` : "";
+  const resolve = key => {
+    switch (key) {
+      case "winner":       return champ ? { teams: [champ], val: "🏆 Champions" } : null;
+      case "runnerup":     return runner ? { teams: [runner], val: "Runner-up" } : null;
+      case "fastestGoal":  return ps.fastestGoal ? { teams: [ps.fastestGoal.team], val: evtVal(ps.fastestGoal) } : null;
+      case "firstOwnGoal": return ps.firstOwnGoal ? { teams: [ps.firstOwnGoal.team], val: evtVal(ps.firstOwnGoal) } : null;
+      case "mostRed":      { const t = leadersBy(ps.redCards, false); return t.length ? { teams: t.map(e => e[0]), val: plural(t[0][1], "red card") } : null; }
+      case "mostConceded": { const t = leadersBy(con, false); return t.length ? { teams: t.map(e => e[0]), val: plural(t[0][1], "goal") + " conceded" } : null; }
+      case "worstGD":      { const t = leadersBy(gd, true); return t.length ? { teams: t.map(e => e[0]), val: `${t[0][1] > 0 ? "+" : ""}${t[0][1]} GD` } : null; }
+    }
+    return null;
+  };
+  return T.prizes.map(c => {
+    const r = resolve(c.key) || { teams: [], val: "" };
+    return { key: c.key, label: c.label, pct: c.pct, teams: r.teams, val: r.val, single: r.teams.length === 1 };
+  });
+}
+// Bart at the chalkboard — ITP-supplied image asset (Duff Pool chalkboard gag)
+const BART = `<img class="cb-bart" src="bart_chalk_transparent.png" alt="Bart at the chalkboard">`;
+function renderPrizes() {
+  const v = $("#prizesView");
+  if (!v || !T || !T.prizes) return;
+  const cats = duffCats();
+  const lines = cats.map(c => {
+    const single = c.teams.length > 0;
+    const lead = single ? c.teams.map(t => `<span class="cb-lead">${teamChip(t)}</span>`).join(" ") : `<span class="cb-tbd">TBD</span>`;
+    const info = single && c.val ? c.val : "";
+    return `<div class="cb-line"><span class="cb-prize">${c.label}</span>` +
+      `<span class="cb-pool">${c.pct}%</span>` +
+      `<span class="cb-leadwrap">${lead}</span>` +
+      `<span class="cb-info">${info}</span></div>`;
+  }).join("");
+  v.innerHTML =
+    `<div class="cb-scene">` +
+      `<div class="cb-frame">` +
+        `<div class="cb-board"><div class="cb-title">Duff Leaderboard</div>` +
+        `<div class="cb-lines">` +
+          `<div class="cb-line cb-head"><span class="cb-prize">Criteria</span><span class="cb-pool">Share of Pot</span><span class="cb-leadwrap">Current Leader</span><span class="cb-info">Information</span></div>` +
+          lines + `</div></div>` +
+        `<div class="cb-tray"><i class="ch ch1"></i><i class="ch ch2"></i><i class="er"></i></div>` +
+      `</div>` +
+      `<div class="cb-floor"></div>` + BART +
+    `</div>`;
+}
+
 /* ---------- knockout (absolute layout + connectors) ---------- */
 function placeholderText(slot, matchById) {
   if (slot.win) return ({ R32: "R32", R16: "R16", QF: "QF", SF: "SF" }[matchById[slot.win].round] || "") + " winner";
@@ -737,7 +819,7 @@ function renderFreshness() {
 
 function renderAll() {
   document.body.classList.toggle("filtering", selectedOwners.size > 0);
-  renderOwners(); renderStatus(); renderFreshness(); renderNextMatch(); renderGroups(); renderTable(); renderKnockout(); renderSchedule(); renderOdds();
+  renderOwners(); renderStatus(); renderFreshness(); renderNextMatch(); renderGroups(); renderTable(); renderKnockout(); renderSchedule(); renderOdds(); renderPrizes();
 }
 
 /* ---------- load + poll ---------- */
@@ -778,6 +860,8 @@ function setView() {
   $("#tableView").classList.toggle("hidden", view !== "table");
   $("#knockoutView").classList.toggle("hidden", view !== "knockout");
   $("#scheduleView").classList.toggle("hidden", view !== "schedule");
+  const pv = $("#prizesView"); if (pv) pv.classList.toggle("hidden", view !== "prizes");  // ITP only
+  document.body.classList.toggle("duff-view", view === "prizes");   // card fits the board (no stretch)
 }
 
 function initTabs() {
@@ -912,7 +996,7 @@ function applyDeepLink() {
   const q = new URLSearchParams(location.search);
   const hv = location.hash.replace("#", "");
   const qv = q.get("view");
-  const views = ["groups", "table", "knockout", "schedule"];
+  const views = ["groups", "table", "knockout", "schedule", "prizes"];
   if (views.includes(qv)) view = qv;
   else if (views.includes(hv)) view = hv;
   if (["players", "movers"].includes(q.get("tab"))) oddsTab = q.get("tab");
