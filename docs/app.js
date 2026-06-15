@@ -404,7 +404,7 @@ function renderPrizes() {
   v.innerHTML =
     `<div class="cb-scene">` +
       `<div class="cb-frame">` +
-        `<div class="cb-board"><div class="cb-title">Duff Leaderboard</div>` +
+        `<div class="cb-board"><div class="cb-title">Leaderboard</div>` +
         `<div class="cb-lines">` +
           `<div class="cb-line cb-head"><span class="cb-prize">Criteria</span><span class="cb-pool">Share of Pot</span><span class="cb-leadwrap">Current Leader</span><span class="cb-info">Information</span></div>` +
           lines + `</div></div>` +
