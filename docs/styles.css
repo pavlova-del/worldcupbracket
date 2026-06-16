@@ -100,10 +100,22 @@ body {
 /* on the Duff view, the chalkboard fills the full card height (matches the odds table) */
 body.duff-view #bracketPanel { display:flex; flex-direction:column; }
 body.duff-view #prizesView { flex:1 1 auto; display:flex; flex-direction:column; }
-@media (max-width:560px){ .cb-board { padding:18px 16px 40px; } .cb-lines { padding-right:78px; }
-  .cb-bart { right:6px; width:78px; }
-  .cb-line { grid-template-columns:1fr auto; gap:3px 10px; } .cb-prize { grid-column:1 / -1; }
-  .cb-pool, .cb-leadwrap { border-left:none; padding-left:0; } .cb-leadwrap { grid-column:1 / -1; } }
+@media (max-width:560px){
+  /* phone: natural-height stacked blocks (no flex-fill, no 4-column table) */
+  body.duff-view #bracketPanel, body.duff-view #prizesView { display:block; }
+  .cb-scene, .cb-frame, .cb-board, .cb-lines { flex:none; display:block; }
+  .cb-board { padding:18px 16px 86px; }
+  .cb-title { font-size:30px; margin-bottom:8px; }
+  .cb-lines { padding-right:0; }
+  .cb-line.cb-head { display:none; }
+  .cb-line { display:grid; grid-template-columns:1fr auto; grid-template-areas:"prize pool" "lead lead" "info info";
+    align-items:baseline; column-gap:12px; row-gap:3px; padding:12px 0; font-size:19px; }
+  .cb-prize { grid-area:prize; font-weight:700; padding:0; }
+  .cb-pool { grid-area:pool; border-left:none; padding:0; text-align:right; }
+  .cb-leadwrap { grid-area:lead; border-left:none; padding:4px 0 0; }
+  .cb-info { grid-area:info; border-left:none; padding:0; font-size:.74em; }
+  .cb-bart { right:8px; width:66px; }
+}
 
 /* ---- info button + glossary modal ---- */
 .infobtn {
@@ -439,6 +451,10 @@ body.filtering .ltable tr[data-owned="1"] td:last-child {
   .panel { overflow:visible; }
   #bracketPanel, #oddsPanel { flex:1 1 auto; min-width:0; }
   #knockoutView { overflow-x:auto; -webkit-overflow-scrolling:touch; }
+  /* tab bar scrolls horizontally so all tabs (incl. Duff Points) stay reachable */
+  .tabs { overflow-x:auto; overflow-y:hidden; -webkit-overflow-scrolling:touch; scrollbar-width:none; }
+  .tabs::-webkit-scrollbar { display:none; }
+  .tab { flex:0 0 auto; }
   #ownerbar { flex-wrap:nowrap; overflow-x:auto; -webkit-overflow-scrolling:touch; padding:10px 14px; }
   #ownerbar .chip { flex:0 0 auto; }
   .nextbox { margin:10px 12px 0; }
