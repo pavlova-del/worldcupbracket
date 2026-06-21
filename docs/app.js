@@ -240,6 +240,8 @@ function teamMove(team) {
 }
 const pct = team => `${((probLatest[team] ?? 0) * 100).toFixed(1)}%`;
 const owned = team => selectedOwners.size && T.teams[team] && selectedOwners.has(T.teams[team].owner) ? 1 : 0;
+// out of contention = the bookie has dropped the team from the winner market
+const isOut = team => Object.keys(probLatest).length > 0 && !(team in probLatest) && !!(T.teams && T.teams[team]);
 const ownerDot = team => {
   const o = T.teams[team]?.owner;
   return { color: o ? T.owners[o].color : "#555", name: o || "—" };
@@ -281,7 +283,7 @@ function teamRow(team) {
   const row = el("div", "trow");
   row.dataset.owned = owned(team);
   row.innerHTML =
-    `<img src="${FLAG(T.teams[team].iso)}" alt="">` +
+    `<img class="${isOut(team) ? "flagout" : ""}" src="${FLAG(T.teams[team].iso)}" alt="">` +
     `<div><div class="tname">${seedBadge(team)}${team}</div>` +
     `<div class="owner"><span class="dot" style="background:${od.color}"></span>${od.name}</div></div>` +
     `<span class="pct">${pct(team)}</span>` +
@@ -321,7 +323,7 @@ function renderTable() {
       const q = !gdone && cl[team] && cl[team].top2 ? `<span class="qbadge" title="Qualified for the Round of 32">Q</span>` : "";
       return `<tr class="${cls}" data-owned="${owned(team)}">` +
         `<td class="pos">${i + 1}</td>` +
-        `<td class="lt-team"><img src="${FLAG(T.teams[team]?.iso)}">` +
+        `<td class="lt-team"><img class="${isOut(team) ? "flagout" : ""}" src="${FLAG(T.teams[team]?.iso)}">` +
         `<span class="lt-nm">${team}</span>${q}<span class="otag"><span class="dot" style="background:${od.color}"></span>${od.name}</span></td>` +
         `<td>${r.P || 0}</td><td class="hidem">${r.W || 0}</td><td class="hidem">${r.D || 0}</td><td class="hidem">${r.L || 0}</td>` +
         `<td class="hidem">${r.GF || 0}</td><td class="hidem">${r.GA || 0}</td>` +
@@ -738,7 +740,7 @@ function renderOdds() {
     if (shownPlayer[r.pl] != null && Math.abs(r.p - shownPlayer[r.pl]) > 1e-6) tr.className = "flash";
     shownPlayer[r.pl] = r.p;
     const flags = T.owners[r.pl].teams.map(tm => {
-      const out = standing[tm] && standing[tm].out;
+      const out = isOut(tm) || (standing[tm] && standing[tm].out);
       return `<img class="${out ? "tmout" : ""}" src="${FLAG(T.teams[tm].iso)}" title="${tm}${out ? " · out" : ""}" alt="">`;
     }).join("");
     tr.innerHTML = `<td class="rank">${i + 1}${moveChip(md)}</td>` +

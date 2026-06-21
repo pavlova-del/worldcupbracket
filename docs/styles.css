@@ -41,6 +41,8 @@ body {
 .lt-team .otag .dot { width:8px; height:8px; border-radius:50%; }
 .qbadge { display:inline-block; font-size:9.5px; font-weight:800; color:#08231a; background:var(--up);
   border-radius:9px; padding:1px 5px; margin:0 6px; vertical-align:middle; }
+/* knocked-out team flag: greyed wherever it appears (groups, table, slips) */
+.flagout { filter:grayscale(1); opacity:.55; }
 .ltable tr.qual td.pos { box-shadow:inset 3px 0 0 var(--up); }
 .ltable tr.out { opacity:.45; }
 .ltable tr.out .lt-nm { text-decoration:line-through; }
