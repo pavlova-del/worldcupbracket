@@ -319,7 +319,7 @@ function renderTable() {
       const r = standing[team] || {};
       const od = ownerDot(team);
       const gd = r.GD || 0;
-      const cls = ((r.out || isOut(team)) ? "out" : "") + (i < 2 ? " qual" : "");
+      const cls = (r.out ? "out" : "") + (i < 2 ? " qual" : "");
       const q = !gdone && cl[team] && cl[team].top2 ? `<span class="qbadge" title="Qualified for the Round of 32">Q</span>` : "";
       return `<tr class="${cls}" data-owned="${owned(team)}">` +
         `<td class="pos">${i + 1}</td>` +
