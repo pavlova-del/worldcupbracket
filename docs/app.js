@@ -13,7 +13,7 @@ const STALE_SECS = 360;
 let ageOverride = null;   // ?age=<secs> preview hook for the freshness footer
 
 // bracket geometry (px)
-const H = 64, HEADER_H = 28, MATCHW = 170, HGAP = 40, COLW = MATCHW + HGAP;
+const H = 64, HEADER_H = 28, MATCHW = 188, HGAP = 40, COLW = MATCHW + HGAP;
 const ROUND_COL = { R32: 0, R16: 1, QF: 2, SF: 3, Final: 4 };
 
 let T = null;
@@ -439,7 +439,7 @@ function kslot(team, opts) {
   s.dataset.owned = owned(team);
   s.title = opts.prov ? `${team} — ${od.name} · qualified (final group position TBD)` : `${team} — ${od.name}`;
   s.innerHTML = `<span></span><img src="${FLAG(T.teams[team].iso)}" alt="">` +
-    `<span class="nm">${team}</span>` +
+    `<span class="knm"><span class="nm">${team}</span>${od.name && od.name !== "—" ? `<span class="kown">${od.name}</span>` : ""}</span>` +
     (opts.prov ? `<span class="kq" title="Qualified — final group position TBD">Q</span>` : `<span class="kscore">${opts.score}</span>`);
   return s;
 }
@@ -935,6 +935,7 @@ function initInfo() {
     `<dt><span class="down">▼ Drifting</span></dt><dd>The odds have drifted <b>out</b> — the team is now <b>less</b> likely to win.</dd>` +
     `<dt>Player slips</dt><dd>Your overall chance: the Win % of all the teams you own, added together.</dd>` +
     `<dt>Table</dt><dd>Live group standings. The top two (green bar) qualify; greyed-out teams are knocked out.</dd>` +
+    `<dt><span class="qbadge">Q</span> Qualified</dt><dd>This team is <b>mathematically guaranteed</b> a top-two group finish — already through to the Round of 32 even before its group's last games. In the bracket it sits in its slot provisionally; its exact position (and opponent) is locked in once the group finishes.</dd>` +
     `<dt>Live</dt><dd>Scores update in real time; the glowing card is a match in progress.</dd>` +
     `</dl><button class="tour-start">Take The Tour</button></div>`;
   document.body.appendChild(modal);
