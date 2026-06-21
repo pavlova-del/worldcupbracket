@@ -708,6 +708,17 @@ function renderOdds() {
       `<td class="wp">${pct(t)}</td><td class="delta ${mv.cls}">${mv.txt}</td>`;
     tb.appendChild(tr);
   });
+  // teams that can no longer win (dropped from the odds market): kept on but greyed
+  // and parked at the bottom, seed preserved
+  Object.keys(T.teams).filter(t => !(t in probLatest) && seed[t]).sort((a, b) => seed[a] - seed[b]).forEach(t => {
+    const od = ownerDot(t);
+    const tr = el("tr", "gone"); tr.dataset.owned = owned(t);
+    tr.innerHTML = `<td class="rank">${seed[t]}</td>` +
+      `<td><span class="team"><img src="${FLAG(T.teams[t].iso)}"><span class="odot" style="background:${od.color}" title="${od.name}"></span>${t}</span></td>` +
+      `<td class="sparkcell"></td>` +
+      `<td class="wp">out</td><td class="delta"></td>`;
+    tb.appendChild(tr);
+  });
 
   // player slips (accumulative)
   const players = Object.keys(T.owners).map(pl => {
@@ -886,8 +897,13 @@ async function refresh() {
     baseWinner = base.winner;
   }
   probPrev = baseWinner ? fairProbs(baseWinner) : {};
+  // fixed "tournament seed": rank every team once from the fullest odds snapshot we
+  // have (before any eliminations) so a team keeps its seed even after the bookie
+  // drops it from the winner market. Lower decimal price = stronger = seed 1.
   seed = {};
-  Object.keys(probLatest).sort((a, b) => probLatest[b] - probLatest[a]).forEach((t, i) => seed[t] = i + 1);
+  let seedRef = latest.winner || {};
+  (history || []).forEach(h => { if (h.winner && Object.keys(h.winner).length > Object.keys(seedRef).length) seedRef = h.winner; });
+  Object.keys(seedRef).filter(t => T.teams[t]).sort((a, b) => seedRef[a] - seedRef[b]).forEach((t, i) => seed[t] = i + 1);
   standing = {}; matchScore = {};
   if (results) {
     for (const L in results.groups) results.groups[L].forEach(r => standing[r.team] = r);
@@ -930,7 +946,7 @@ function initInfo() {
     `<h2>What do the numbers mean?</h2><dl>` +
     `<dt>Win %</dt><dd>Each team's chance of winning the <b>whole tournament</b>, from the bookies' outright odds (rescaled so all teams add up to 100%). Higher = more likely.</dd>` +
     `<dt>Outright odds</dt><dd>The bookmaker's price on a team to lift the trophy — not to win a single match. We convert that price into the Win %.</dd>` +
-    `<dt>Seed</dt><dd>A team's strength ranking by current odds: <b>1</b> is the favourite, <b>48</b> the longest shot.</dd>` +
+    `<dt>Seed</dt><dd>A team's strength ranking from the bookies' pre-tournament odds: <b>1</b> is the favourite, <b>48</b> the longest shot. It's fixed for the tournament, so a team keeps its seed even after it's knocked out.</dd>` +
     `<dt><span class="up">▲ Shortening</span></dt><dd>The team's odds have come <b>in</b> over the last 24h — it's now <b>more</b> likely to win. The number is the change in Win %.</dd>` +
     `<dt><span class="down">▼ Drifting</span></dt><dd>The odds have drifted <b>out</b> — the team is now <b>less</b> likely to win.</dd>` +
     `<dt>Player slips</dt><dd>Your overall chance: the Win % of all the teams you own, added together.</dd>` +

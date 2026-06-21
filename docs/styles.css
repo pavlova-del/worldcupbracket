@@ -320,6 +320,10 @@ main { display:flex; flex:1; gap:14px; padding:14px 20px 20px; min-height:0; }
   background:var(--down); color:#fff; font-size:9px; font-weight:800; letter-spacing:.5px;
   padding:1px 5px; border-radius:4px; vertical-align:middle; }
 .otable tr.out { opacity:.5; }
+/* teams that can no longer win the cup: greyed, parked at the bottom, seed kept */
+.otable tr.gone { opacity:.42; }
+.otable tr.gone img { filter:grayscale(1); }
+.otable tr.gone .wp { font-style:italic; color:var(--flat); font-weight:600; text-transform:uppercase; font-size:11px; }
 .pct { font-weight:700; font-size:14px; min-width:46px; text-align:right; }
 .delta { font-size:11px; min-width:42px; text-align:right; }
 .up { color:var(--up); } .down { color:var(--down); } .flat { color:var(--flat); }
