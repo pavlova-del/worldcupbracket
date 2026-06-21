@@ -310,15 +310,19 @@ function renderTable() {
     const card = el("div", "ltcard", `<h3>Group ${L}</h3>`);
     const teams = [...T.groups[L]].sort((a, b) =>
       ((standing[a] && standing[a].rank) || 99) - ((standing[b] && standing[b].rank) || 99));
+    const grp = results.groups[L] || [];
+    const gdone = grp.length === 4 && grp.every(r => r.P >= 3);
+    const cl = groupClinch(grp);   // early-clinched top-2 teams (before group finishes)
     const body = teams.map((team, i) => {
       const r = standing[team] || {};
       const od = ownerDot(team);
       const gd = r.GD || 0;
       const cls = (r.out ? "out" : "") + (i < 2 ? " qual" : "");
+      const q = !gdone && cl[team] && cl[team].top2 ? `<span class="qbadge" title="Qualified for the Round of 32">Q</span>` : "";
       return `<tr class="${cls}" data-owned="${owned(team)}">` +
         `<td class="pos">${i + 1}</td>` +
         `<td class="lt-team"><img src="${FLAG(T.teams[team]?.iso)}">` +
-        `<span class="lt-nm">${team}</span><span class="otag"><span class="dot" style="background:${od.color}"></span>${od.name}</span></td>` +
+        `<span class="lt-nm">${team}</span>${q}<span class="otag"><span class="dot" style="background:${od.color}"></span>${od.name}</span></td>` +
         `<td>${r.P || 0}</td><td class="hidem">${r.W || 0}</td><td class="hidem">${r.D || 0}</td><td class="hidem">${r.L || 0}</td>` +
         `<td class="hidem">${r.GF || 0}</td><td class="hidem">${r.GA || 0}</td>` +
         `<td>${gd > 0 ? "+" + gd : gd}</td><td class="pts">${r.Pts || 0}</td></tr>`;
@@ -429,13 +433,14 @@ function pslot(text) {
 }
 // a knockout slot once a real team is known (flag + owner colour + score + win/lose)
 function kslot(team, opts) {
-  const s = el("div", "slot" + (opts.won ? " kwin" : "") + (opts.lost ? " klose" : ""));
+  const s = el("div", "slot" + (opts.won ? " kwin" : "") + (opts.lost ? " klose" : "") + (opts.prov ? " kprov" : ""));
   const od = ownerDot(team);
   s.style.borderLeftColor = od.color;
   s.dataset.owned = owned(team);
-  s.title = `${team} — ${od.name}`;
+  s.title = opts.prov ? `${team} — ${od.name} · qualified (final group position TBD)` : `${team} — ${od.name}`;
   s.innerHTML = `<span></span><img src="${FLAG(T.teams[team].iso)}" alt="">` +
-    `<span class="nm">${team}</span><span class="kscore">${opts.score}</span>`;
+    `<span class="nm">${team}</span>` +
+    (opts.prov ? `<span class="kq" title="Qualified — final group position TBD">Q</span>` : `<span class="kscore">${opts.score}</span>`);
   return s;
 }
 // assign the 8 best third-placed teams to the third-slots, respecting allowed groups
@@ -453,6 +458,35 @@ function assignThirds(slots, qualifying) {
     return false;
   })(0);
   return assign;
+}
+// which teams are mathematically guaranteed a top-2 (or 1st) group finish, by
+// brute-forcing every outcome of the group's remaining fixtures. Conservative:
+// a team clinches top-2 only if in EVERY scenario at most one rival can match or
+// pass its points (so tiebreakers can never drop it below 2nd).
+function groupClinch(rows) {
+  const teams = rows.map(r => r.team);
+  const base = {}; rows.forEach(r => base[r.team] = r.Pts || 0);
+  const rem = ((results && results.matches) || []).filter(m =>
+    m.state === "pre" && teams.includes(m.a) && teams.includes(m.b));
+  const scen = [];
+  (function rec(i, p) {
+    if (i === rem.length) { scen.push(p); return; }
+    const { a, b } = rem[i];
+    rec(i + 1, { ...p, [a]: p[a] + 3 });            // a wins
+    rec(i + 1, { ...p, [a]: p[a] + 1, [b]: p[b] + 1 }); // draw
+    rec(i + 1, { ...p, [b]: p[b] + 3 });            // b wins
+  })(0, base);
+  const f = {};
+  teams.forEach(t => {
+    let won = true, top2 = true;
+    for (const s of scen) {
+      const ge = teams.reduce((n, o) => n + (o !== t && s[o] >= s[t] ? 1 : 0), 0);
+      if (ge >= 1) won = false;
+      if (ge >= 2) top2 = false;
+    }
+    f[t] = { won, top2 };
+  });
+  return f;
 }
 // resolve real teams into bracket slots from group standings + actual match winners
 function resolveBracket(matchById) {
@@ -473,11 +507,20 @@ function resolveBracket(matchById) {
     }));
     thirds = assignThirds(slots, q);
   }
+  // teams clinched into the top 2 are shown provisionally (in their current-rank
+  // slot) before the group's last games are played; `prov` flags those fills
+  const clinch = {}; Object.keys(groups).forEach(g => clinch[g] = done[g] ? null : groupClinch(groups[g]));
+  const prov = new Set();
   const cache = {};
   function slotTeam(slot, key) {
     if (slot.win) return matchWinner(slot.win);
-    if (slot.pos === "W") return done[slot.group] ? rank[slot.group][0] : null;
-    if (slot.pos === "R") return done[slot.group] ? rank[slot.group][1] : null;
+    if (slot.pos === "W" || slot.pos === "R") {
+      const t = rank[slot.group] ? rank[slot.group][slot.pos === "W" ? 0 : 1] : null;
+      if (done[slot.group]) return t;
+      const c = clinch[slot.group];
+      if (t && c && c[t] && c[t].top2) { prov.add(key); return t; }
+      return null;
+    }
     if (slot.pos === "3") return thirds[key] || null;
     return null;
   }
@@ -493,7 +536,7 @@ function resolveBracket(matchById) {
     }
     return cache[mid];
   }
-  return { slotTeam, matchWinner };
+  return { slotTeam, matchWinner, prov };
 }
 function line(parent, x, y, w, h, cls) {
   const d = el("div", cls || "kline");
@@ -544,11 +587,11 @@ function renderKnockout() {
   });
 
   // match boxes — real teams once known, otherwise the position placeholder
-  const { slotTeam, matchWinner } = resolveBracket(matchById);
+  const { slotTeam, matchWinner, prov } = resolveBracket(matchById);
   const slotFor = (m, side) => {
     const key = `${m.id}-${side}`, team = slotTeam(m[side], key);
     if (!team) return { team: null, label: placeholderText(m[side], matchById) };
-    return { team, key };
+    return { team, key, prov: prov.has(key) };
   };
   T.knockout.forEach(m => {
     const box = el("div", "kbox");
@@ -567,6 +610,7 @@ function renderKnockout() {
         score: score === "" ? "" : score,
         won: winner && winner === slot.team,
         lost: winner && winner !== slot.team,
+        prov: slot.prov,
       }));
     });
     wrap.appendChild(box);

@@ -39,6 +39,8 @@ body {
 .lt-nm { font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .lt-team .otag { color:var(--dim); font-size:11px; font-weight:400; display:inline-flex; align-items:center; gap:4px; white-space:nowrap; }
 .lt-team .otag .dot { width:8px; height:8px; border-radius:50%; }
+.qbadge { display:inline-block; font-size:9.5px; font-weight:800; color:#08231a; background:var(--up);
+  border-radius:9px; padding:1px 5px; margin:0 6px; vertical-align:middle; }
 .ltable tr.qual td.pos { box-shadow:inset 3px 0 0 var(--up); }
 .ltable tr.out { opacity:.45; }
 .ltable tr.out .lt-nm { text-decoration:line-through; }
@@ -335,6 +337,9 @@ main { display:flex; flex:1; gap:14px; padding:14px 20px 20px; min-height:0; }
 .kbox .slot.kwin .kscore { color:var(--gold); }
 .kbox .slot.klose { opacity:.5; }
 .kbox .slot.klose .nm { text-decoration:line-through; }
+/* provisional (early-clinched) bracket slot: italic name + green "Q" badge */
+.kbox .slot.kprov .nm { font-style:italic; }
+.slot .kq { font-size:9.5px; font-weight:800; color:#08231a; background:var(--up); border-radius:10px; padding:1px 6px; margin-right:8px; }
 .ktitle { position:absolute; color:var(--gold); font-size:12px; font-weight:700; transform:translateX(-2px); }
 .kchamp { position:absolute; transform:translateY(-50%); text-align:center; }
 .match { background:var(--panel2); border:1px solid var(--line); border-radius:9px; overflow:hidden; }
