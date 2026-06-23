@@ -545,6 +545,219 @@ function line(parent, x, y, w, h, cls) {
   d.style.left = x + "px"; d.style.top = y + "px"; d.style.width = w + "px"; d.style.height = h + "px";
   parent.appendChild(d);
 }
+/* ---------- Sweepstake Rankings (worldcupbracket only — needs tournament.json `pots`) ----------
+   Each pot's prize goes to the team that reaches the furthest round; ties (same round)
+   broken by Points -> GD -> goals for -> goals against -> yellows -> reds. Prizes pay
+   the team's owner: $200 champion, $70 runner-up, $30 per pot winner. */
+const SWEEP_PRIZES = { champion: 200, runnerUp: 70, pot: 30 };
+function sweepDepth(team, ctx) {
+  const roundN = { R32: 2, R16: 3, QF: 4, SF: 5, Final: 6 };
+  let deepest = 0;
+  T.knockout.forEach(m => {
+    const h = ctx.slotTeam(m.home, `${m.id}-home`), a = ctx.slotTeam(m.away, `${m.id}-away`);
+    if ((h === team || a === team) && (roundN[m.round] || 0) > deepest) deepest = roundN[m.round];
+  });
+  if (ctx.matchWinner(104) === team) return { n: 7, label: "Champion" };
+  if (deepest === 6) return { n: 6, label: "Final" };
+  if (deepest) return { n: deepest, label: { 2: "Round of 32", 3: "Round of 16", 4: "Quarter-final", 5: "Semi-final" }[deepest] };
+  if (isOut(team) || (standing[team] && standing[team].out)) return { n: 0, label: "Out · group" };
+  return { n: 1, label: "Group stage" };
+}
+function sweepStat(team) {
+  const ps = (results && results.prizeStats) || {}, s = standing[team] || {};
+  const gf = (ps.scored || {})[team] ?? s.GF ?? 0, ga = (ps.conceded || {})[team] ?? s.GA ?? 0;
+  return { pts: s.Pts || 0, gf, ga, gd: gf - ga, y: (ps.yellowCards || {})[team] || 0, r: (ps.redCards || {})[team] || 0 };
+}
+function sweepRank(teams, ctx) {
+  return teams.map(t => ({ t, d: sweepDepth(t, ctx), s: sweepStat(t) }))
+    .sort((a, b) => b.d.n - a.d.n || b.s.pts - a.s.pts || b.s.gd - a.s.gd || b.s.gf - a.s.gf || a.s.ga - b.s.ga || a.s.y - b.s.y || a.s.r - b.s.r);
+}
+// shared data model for the Sweepstake tab + its exported infographic
+function sweepsModel() {
+  const byId = {}; T.knockout.forEach(m => byId[m.id] = m);
+  const ctx = resolveBracket(byId);
+  const champ = ctx.matchWinner(104);
+  const fin = byId[104]; let runner = null;
+  if (fin && champ) { const h = ctx.slotTeam(fin.home, "104-home"), a = ctx.slotTeam(fin.away, "104-away"); runner = champ === h ? a : h; }
+  const ownerOf = t => (t && T.teams[t]) ? T.teams[t].owner : null;
+  const winnings = {};
+  const award = (t, amt, label) => { const o = ownerOf(t); if (!o) return; (winnings[o] || (winnings[o] = { amt: 0, prizes: [] })).amt += amt; winnings[o].prizes.push(label); };
+  award(champ, SWEEP_PRIZES.champion, "Winner"); award(runner, SWEEP_PRIZES.runnerUp, "Runner-up");
+  const ranked = {};
+  Object.keys(T.pots).forEach(p => { ranked[p] = sweepRank(T.pots[p], ctx); const w = ranked[p][0]; award(w && w.t, SWEEP_PRIZES.pot, p); });
+  const board = Object.entries(winnings).sort((a, b) => b[1].amt - a[1].amt);
+  return { ctx, champ, runner, ranked, board, ownerOf };
+}
+
+// draw a shareable PNG infographic on a <canvas> — no external libs and no flag
+// images, so the canvas is never tainted and always exports
+// gather a broad "daily/weekly digest" from the live data
+function digestModel() {
+  const s = sweepsModel();
+  const pots = Object.keys(T.pots).map(p => { const w = s.ranked[p][0]; return { pot: p, team: w && w.t, owner: w && w.t ? s.ownerOf(w.t) : null, round: w ? w.d.label : "" }; });
+  const out = Object.keys(T.teams).filter(t => isOut(t)).sort((a, b) => (seed[a] || 99) - (seed[b] || 99)).map(t => ({ team: t, owner: T.teams[t].owner }));
+  const slips = Object.keys(T.owners).map(o => ({ o, p: sumProb(T.owners[o].teams, probLatest) })).sort((a, b) => b.p - a.p);
+  const md = Object.keys(probLatest).filter(t => T.teams[t]).map(t => ({ t, d: (probLatest[t] - (probPrev[t] ?? probLatest[t])) * 100 }));
+  const riser = md.slice().sort((a, b) => b.d - a.d)[0] || null;
+  const faller = md.slice().sort((a, b) => a.d - b.d)[0] || null;
+  return { ...s, pots, out, slips, riser, faller };
+}
+
+// draw the shareable digest PNG on a <canvas> — no external libs / no flag images,
+// so it never taints and always exports
+function drawDigest(m) {
+  const C = { bg0: "#0d2c21", bg1: "#06120d", panel: "#10362a", line: "#1f5a44", gold: "#ffd24a", ink: "#f4f7f5", dim: "#9fb3aa", up: "#5fcf8f", down: "#ff6b6b" };
+  const F = s => `${s}px -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif`;
+  const ocol = o => (o && T.owners[o] && T.owners[o].color) || "#888";
+  const W = 1080, pad = 56, IW = W - 2 * pad, R = 2, hdr = 50, row = 66, headH = 196, footH = 54;
+  const slips = m.slips.slice(0, 3);
+  const movers = [];
+  if (m.riser && m.riser.d > 0.05) movers.push({ t: m.riser.t, d: m.riser.d, up: true });
+  if (m.faller && m.faller.d < -0.05) movers.push({ t: m.faller.t, d: m.faller.d, up: false });
+  const outRows = Math.max(1, Math.ceil(m.out.length / 2));
+  const H = headH + (hdr + m.pots.length * row + 14) + (hdr + slips.length * row + 14) +
+    (hdr + (movers.length || 1) * row + 14) + (hdr + outRows * 44 + 16) + footH;
+  const cv = document.createElement("canvas"); cv.width = W * R; cv.height = H * R;
+  const c = cv.getContext("2d"); c.scale(R, R); c.textBaseline = "alphabetic";
+  const rr = (x, y, w, h, r) => { c.beginPath(); c.roundRect(x, y, w, h, r); };
+  const txt = (s, x, y, sz, wt, col, al) => { c.font = `${wt} ${F(sz)}`; c.fillStyle = col; c.textAlign = al || "left"; c.fillText(String(s), x, y); };
+  const dot = (x, y, r, col) => { c.beginPath(); c.arc(x, y, r, 0, 7); c.fillStyle = col; c.fill(); };
+  const clip = (s, maxw, wt, sz) => { c.font = `${wt} ${F(sz)}`; s = String(s); if (c.measureText(s).width <= maxw) return s; let t = s; while (t.length && c.measureText(t + "…").width > maxw) t = t.slice(0, -1); return t + "…"; };
+  const card = (yy, h) => { rr(pad, yy, IW, h, 12); c.fillStyle = C.panel; c.fill(); };
+
+  let g = c.createLinearGradient(0, 0, 0, H); g.addColorStop(0, C.bg0); g.addColorStop(1, C.bg1); c.fillStyle = g; c.fillRect(0, 0, W, H);
+  g = c.createLinearGradient(0, 0, W, 0); g.addColorStop(0, "rgba(255,210,74,.16)"); g.addColorStop(.6, "rgba(255,210,74,.02)"); c.fillStyle = g; c.fillRect(0, 0, W, headH); c.fillStyle = C.gold; c.fillRect(0, headH - 3, W, 3);
+  txt("WORLD CUP 2026", pad, 88, 50, 800, C.gold);
+  txt("Sweepstake update", pad, 128, 26, 500, C.ink);
+  txt(new Date().toLocaleDateString("en-AU", { weekday: "long", day: "numeric", month: "long", year: "numeric" }), pad, 164, 22, 500, C.dim);
+
+  let y = headH + 20;
+  const head = s => { txt(s, pad, y + 8, 23, 800, C.gold); y += hdr; };
+
+  head("POT LEADERS · furthest so far");
+  m.pots.forEach((p, i) => {
+    const ry = y + i * row, rh = row - 12; card(ry, rh);
+    txt(p.pot.toUpperCase(), pad + 18, ry + rh / 2 + 7, 15, 700, C.dim);
+    if (p.team) { dot(pad + 110, ry + rh / 2, 7, ocol(p.owner)); txt(clip(p.team + "  ·  " + p.owner, IW - 360, 600, 23), pad + 126, ry + rh / 2 + 8, 23, 600, C.ink); txt(p.round, W - pad - 16, ry + rh / 2 + 7, 18, 600, C.dim, "right"); }
+    else txt("TBD", pad + 110, ry + rh / 2 + 8, 22, 500, C.dim);
+  }); y += m.pots.length * row + 14;
+
+  head("MOST FAVOURABLE SLIPS");
+  slips.forEach((s, i) => {
+    const ry = y + i * row, rh = row - 12, col = ocol(s.o); card(ry, rh);
+    txt(i + 1, pad + 24, ry + rh / 2 + 8, 24, 800, i === 0 ? C.gold : C.dim, "center");
+    dot(pad + 74, ry + rh / 2, 18, col); txt((s.o[0] || "").toUpperCase(), pad + 74, ry + rh / 2 + 7, 20, 800, "#08231a", "center");
+    txt(s.o, pad + 108, ry + rh / 2 + 8, 24, 700, C.ink);
+    txt((s.p * 100).toFixed(1) + "%", W - pad - 16, ry + rh / 2 + 9, 28, 800, C.gold, "right");
+  }); y += slips.length * row + 14;
+
+  head("BIGGEST MOVERS · last 24h");
+  if (!movers.length) { card(y, row - 12); txt("Odds steady — no notable moves.", pad + 18, y + (row - 12) / 2 + 7, 21, 500, C.dim); y += row + 14; }
+  else { movers.forEach((mv, i) => { const ry = y + i * row, rh = row - 12, col = mv.up ? C.up : C.down; card(ry, rh); txt(mv.up ? "▲" : "▼", pad + 22, ry + rh / 2 + 8, 22, 800, col); txt(clip(mv.t, IW - 300, 700, 24), pad + 58, ry + rh / 2 + 8, 24, 700, C.ink); txt((mv.up ? "+" : "") + mv.d.toFixed(1) + "%", W - pad - 16, ry + rh / 2 + 9, 26, 800, col, "right"); }); y += movers.length * row + 14; }
+
+  head("KNOCKED OUT");
+  if (!m.out.length) { card(y, 44); txt("Nobody eliminated yet.", pad + 18, y + 29, 21, 500, C.dim); y += 44 + 16; }
+  else { const colW = IW / 2; m.out.forEach((o, i) => { const cx = pad + (i % 2) * colW, ry = y + Math.floor(i / 2) * 44; dot(cx + 10, ry + 19, 6, ocol(o.owner)); txt(clip(o.team + " · " + o.owner, colW - 56, 500, 21), cx + 26, ry + 26, 21, 500, C.dim); }); y += outRows * 44 + 16; }
+
+  txt("Updated " + new Date().toLocaleString("en-AU", { day: "numeric", month: "short", hour: "numeric", minute: "2-digit" }) + " · live at the dashboard", pad, H - 22, 18, 500, C.dim);
+  return cv;
+}
+
+async function exportSweeps(btn) {
+  const reset = btn ? btn.textContent : "";
+  const flash = msg => { if (btn) { btn.textContent = msg; setTimeout(() => { btn.textContent = reset; }, 2600); } };
+  drawDigest(digestModel()).toBlob(async blob => {
+    if (!blob) return;
+    const file = new File([blob], `wc-update-${new Date().toISOString().slice(0, 10)}.png`, { type: "image/png" });
+    if (navigator.canShare && navigator.canShare({ files: [file] })) {
+      try { await navigator.share({ files: [file], title: "World Cup sweepstake", text: "Sweepstake update" }); return; }
+      catch (e) { if (e && e.name === "AbortError") return; }
+    }
+    let copied = false;
+    try { await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]); copied = true; } catch (e) { /* clipboard unsupported */ }
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a"); a.href = url; a.download = file.name; document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    flash(copied ? "Saved + copied ✓" : "Image saved ✓");
+  }, "image/png");
+}
+
+function renderSweeps() {
+  const v = $("#sweepsView");
+  if (!v || !T || !T.pots) return;
+  const M = sweepsModel();
+  const { champ, runner, ranked, board, ownerOf } = M;
+  const ocol = o => (o && T.owners[o] && T.owners[o].color) || "#888";
+  const colOf = t => ocol(ownerOf(t));
+  const teamCell = t => t
+    ? `<span class="sw-team"><img class="${isOut(t) ? "flagout" : ""}" src="${FLAG(T.teams[t].iso)}"><b>${t}</b>` +
+      `<span class="sw-own"><span class="dz-dot" style="background:${colOf(t)}"></span>${ownerOf(t) || "—"}</span></span>`
+    : `<span class="dz-tbd">TBD</span>`;
+  // ----- hero -----
+  let html = `<div class="sw-hero">` +
+    `<button class="sw-export" type="button">Share update</button>` +
+    `<div class="sw-hero-title">Sweepstake Rankings</div>` +
+    `<div class="sw-hero-pool"><b>$390</b> prize pool · $200 winner · $70 runner-up · $30 each pot</div>` +
+    `<div class="sw-rules"><b>Pot winner</b> = the team that progresses furthest. Ties are broken in order: ` +
+    `Points → Goal difference → Goals scored → Goals conceded → Yellow cards → Red cards.</div></div>`;
+  // ----- Winner / Runner-up hero cards -----
+  const bigPrize = (cls, medal, amt, label, team) =>
+    `<div class="sw-big ${cls}"${team ? ` style="--c:${colOf(team)}"` : ""}><div class="sw-big-medal">${medal}</div>` +
+    `<div class="sw-big-info"><div class="sw-big-amt">$${amt}</div><div class="sw-big-lab">${label}</div>` +
+    `<div class="sw-big-team">${team ? teamCell(team) : `<span class="sw-tbd">to be decided</span>`}</div></div></div>`;
+  html += `<div class="sw-bigs">` + bigPrize("gold", "🏆", SWEEP_PRIZES.champion, "Tournament Winner", champ) +
+    bigPrize("silver", "🥈", SWEEP_PRIZES.runnerUp, "Runner-up", runner) + `</div>`;
+  // ----- 2x2 pot cards -----
+  html += `<div class="sw-potcards">` + Object.keys(T.pots).map(p => {
+    const w = ranked[p][0], t = w && w.t;
+    return `<div class="sw-potcard"${t ? ` style="--c:${colOf(t)}"` : ""}>` +
+      `<div class="sw-pc-head"><span class="sw-pc-name">${p}</span><span class="sw-pc-cash">$${SWEEP_PRIZES.pot}</span></div>` +
+      `<div class="sw-pc-team">${t ? teamCell(t) : `<span class="sw-tbd">TBD</span>`}</div>` +
+      `<div class="sw-pc-round">${t ? "reached " + w.d.label : "—"}</div></div>`;
+  }).join("") + `</div>`;
+  // ----- money: podium (top 3) + list -----
+  if (board.length) {
+    const av = o => `<span class="sw-av" style="background:${ocol(o)}">${o[0]}</span>`;
+    const chips = w => w.prizes.map(x => `<em>${x}</em>`).join("");
+    html += `<div class="sw-money"><div class="sw-money-head"><h3>💰 Prize money — as it stands</h3></div>`;
+    if (board.length >= 3) {
+      const pod = ([o, w], place, medal) => `<div class="sw-pod sw-pod-${place}" style="--c:${ocol(o)}">` +
+        `<div class="sw-pod-top"><div class="sw-pod-medal">${medal}</div>${av(o)}<div class="sw-pod-name">${o}</div>` +
+        `<div class="sw-pod-amt">$${w.amt}</div></div><div class="sw-pod-block">${place}</div></div>`;
+      html += `<div class="sw-podium">` + pod(board[1], 2, "🥈") + pod(board[0], 1, "🥇") + pod(board[2], 3, "🥉") + `</div>`;
+      const rest = board.slice(3);
+      if (rest.length) html += `<div class="sw-mlist">` + rest.map(([o, w], i) =>
+        `<div class="sw-mrow"><span class="sw-mrank">${i + 4}</span>${av(o)}<span class="sw-mname">${o}</span>` +
+        `<span class="sw-mprz">${chips(w)}</span><span class="sw-mamt">$${w.amt}</span></div>`).join("") + `</div>`;
+    } else {
+      html += `<div class="sw-mlist">` + board.map(([o, w], i) =>
+        `<div class="sw-mrow"><span class="sw-mrank">${i + 1}</span>${av(o)}<span class="sw-mname">${o}</span>` +
+        `<span class="sw-mprz">${chips(w)}</span><span class="sw-mamt">$${w.amt}</span></div>`).join("") + `</div>`;
+    }
+    html += `</div>`;
+  }
+
+  const RSHORT = { 7: "Winner", 6: "Final", 5: "SF", 4: "QF", 3: "R16", 2: "R32", 1: "Group", 0: "Out" };
+  html += `<div class="sw-pots">`;
+  Object.keys(T.pots).forEach(p => {
+    const rows = ranked[p].map((r, i) => {
+      const out = isOut(r.t) || (standing[r.t] && standing[r.t].out);
+      return `<tr class="${i === 0 ? "sw-winrow" : ""}${out ? " out" : ""}">` +
+        `<td class="sw-pos">${i + 1}</td><td class="sw-tcell">${teamCell(r.t)}</td>` +
+        `<td class="sw-round">${RSHORT[r.d.n] || r.d.label}</td><td>${r.s.pts}</td>` +
+        `<td>${r.s.gd > 0 ? "+" + r.s.gd : r.s.gd}</td><td class="hidem">${r.s.gf}</td><td class="hidem">${r.s.ga}</td>` +
+        `<td class="hidem">${r.s.y}</td><td class="hidem">${r.s.r}</td>` +
+        `<td class="sw-cash">${i === 0 ? "$" + SWEEP_PRIZES.pot : ""}</td></tr>`;
+    }).join("");
+    html += `<div class="sw-pot"><h3>${p}</h3><table class="sw-table"><thead><tr>` +
+      `<th></th><th>Team</th><th>Reached</th><th title="Points">Pts</th><th title="Goal difference">GD</th>` +
+      `<th class="hidem">GF</th><th class="hidem">GA</th><th class="hidem" title="Yellow cards">Y</th><th class="hidem" title="Red cards">R</th><th></th>` +
+      `</tr></thead><tbody>${rows}</tbody></table></div>`;
+  });
+  html += `</div>`;
+  v.innerHTML = html;
+  const eb = v.querySelector(".sw-export"); if (eb) eb.onclick = () => exportSweeps(eb);
+}
 function renderKnockout() {
   const v = $("#knockoutView"); v.innerHTML = "";
   const matchById = {}; T.knockout.forEach(m => matchById[m.id] = m);
@@ -876,7 +1089,7 @@ function renderFreshness() {
 
 function renderAll() {
   document.body.classList.toggle("filtering", selectedOwners.size > 0);
-  renderOwners(); renderStatus(); renderFreshness(); renderNextMatch(); renderGroups(); renderTable(); renderKnockout(); renderSchedule(); renderOdds(); renderPrizes();
+  renderOwners(); renderStatus(); renderFreshness(); renderNextMatch(); renderGroups(); renderTable(); renderKnockout(); renderSchedule(); renderOdds(); renderPrizes(); renderSweeps();
 }
 
 /* ---------- load + poll ---------- */
@@ -923,6 +1136,7 @@ function setView() {
   $("#knockoutView").classList.toggle("hidden", view !== "knockout");
   $("#scheduleView").classList.toggle("hidden", view !== "schedule");
   const pv = $("#prizesView"); if (pv) pv.classList.toggle("hidden", view !== "prizes");  // ITP only
+  const sv = $("#sweepsView"); if (sv) sv.classList.toggle("hidden", view !== "sweeps");  // worldcupbracket only
   document.body.classList.toggle("duff-view", view === "prizes");   // card fits the board (no stretch)
 }
 
@@ -1059,7 +1273,7 @@ function applyDeepLink() {
   const q = new URLSearchParams(location.search);
   const hv = location.hash.replace("#", "");
   const qv = q.get("view");
-  const views = ["groups", "table", "knockout", "schedule", "prizes"];
+  const views = ["groups", "table", "knockout", "schedule", "prizes", "sweeps"];
   if (views.includes(qv)) view = qv;
   else if (views.includes(hv)) view = hv;
   if (["players", "movers"].includes(q.get("tab"))) oddsTab = q.get("tab");

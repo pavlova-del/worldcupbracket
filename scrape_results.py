@@ -97,7 +97,7 @@ def main():
 
     matches = []
     # ITP "Duff Pool" prize stats, aggregated over all played matches (see app.js)
-    red, conceded, scored = {}, {}, {}
+    red, yellow, conceded, scored = {}, {}, {}, {}
     fastest = None    # {team, minute, clock, player}
     first_og = None   # {team, minute, clock, player, matchTs, against}
     sb = fetch(SCOREBOARD)
@@ -141,6 +141,8 @@ def main():
             player = (p.get("athletesInvolved") or [{}])[0].get("displayName")
             if p.get("redCard"):
                 red[tname] = red.get(tname, 0) + 1
+            if p.get("yellowCard"):
+                yellow[tname] = yellow.get(tname, 0) + 1
             if p.get("ownGoal"):
                 # ESPN's `team` on an own goal is the beneficiary; the team that
                 # committed it is the opponent (the athlete's side).
@@ -165,7 +167,7 @@ def main():
     hist = [h for h in hist if h.get("ts", 0) >= nowts - 30 * 3600]
 
     prize_stats = {
-        "redCards": red, "conceded": conceded, "scored": scored,
+        "redCards": red, "yellowCards": yellow, "conceded": conceded, "scored": scored,
         "fastestGoal": fastest, "firstOwnGoal": first_og,
     }
     data = {"updated": nowts, "groups": groups, "matches": matches,

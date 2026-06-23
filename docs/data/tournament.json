@@ -816,5 +816,63 @@
         "win": 102
       }
     }
-  ]
+  ],
+  "pots": {
+    "Pot 1": [
+      "Argentina",
+      "Spain",
+      "France",
+      "England",
+      "Portugal",
+      "Brazil",
+      "Morocco",
+      "Netherlands",
+      "Belgium",
+      "Germany",
+      "Croatia",
+      "Colombia"
+    ],
+    "Pot 2": [
+      "Mexico",
+      "Senegal",
+      "Uruguay",
+      "USA",
+      "Japan",
+      "Switzerland",
+      "Iran",
+      "Türkiye",
+      "Austria",
+      "Ecuador",
+      "South Korea",
+      "Australia"
+    ],
+    "Pot 3": [
+      "Algeria",
+      "Egypt",
+      "Canada",
+      "Norway",
+      "Panama",
+      "Ivory Coast",
+      "Sweden",
+      "Paraguay",
+      "Czechia",
+      "Scotland",
+      "Tunisia",
+      "DR Congo"
+    ],
+    "Pot 4": [
+      "Uzbekistan",
+      "Qatar",
+      "Iraq",
+      "South Africa",
+      "Saudi Arabia",
+      "Jordan",
+      "Bosnia & Herzegovina",
+      "Cape Verde",
+      "Ghana",
+      "Curacao",
+      "Haiti",
+      "New Zealand"
+    ]
+  }
 }
