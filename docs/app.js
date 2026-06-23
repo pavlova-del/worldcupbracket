@@ -5,7 +5,7 @@ const FLAG = iso => `https://flagcdn.com/w40/${iso}.png`;
 // Live data is served by the Raspberry Pi (always-on, home AU IP). Set DATA_API
 // to the Pi's public URL to read live; empty = use the committed Pages snapshot.
 const DATA_API = "https://vulcan.tailee0fb5.ts.net";
-const DYNAMIC = new Set(["odds_latest.json", "odds_prev.json", "odds_history.json", "fixtures.json", "results.json"]);
+const DYNAMIC = new Set(["odds_latest.json", "odds_prev.json", "odds_history.json", "fixtures.json", "results.json", "news.json"]);
 let piLive = false;   // did the dynamic data load from the Pi this refresh?
 // the Pi scrapes every ~60s; if the latest snapshot is older than this the data
 // is being served but not refreshing (e.g. Sportsbet started blocking) — flag it.
@@ -30,6 +30,7 @@ let nextRefreshAt = 0;
 let shownTeam = {}, shownPlayer = {};   // last-rendered values, to flash on change
 let fixtures = [];
 let results = null, standing = {}, matchScore = {};   // committed ESPN standings + scores
+let news = null;                                       // {generatedAt, items:[{title,source,url,ts,team}]}
 let liveScores = {};                                   // live overlay fetched client-side
 const pairKey = (a, b) => [a, b].sort().join("|");
 const getMatch = (a, b) => liveScores[pairKey(a, b)] || matchScore[pairKey(a, b)];
@@ -591,86 +592,234 @@ function sweepsModel() {
 
 // draw a shareable PNG infographic on a <canvas> — no external libs and no flag
 // images, so the canvas is never tainted and always exports
-// gather a broad "daily/weekly digest" from the live data
+// gather a broad "tournament digest" from the live data. The pot leaders + player
+// slips are the sweepstake content; the rest is pure football (odds swings,
+// tournament stat leaders, eliminations).
 function digestModel() {
   const s = sweepsModel();
-  const pots = Object.keys(T.pots).map(p => { const w = s.ranked[p][0]; return { pot: p, team: w && w.t, owner: w && w.t ? s.ownerOf(w.t) : null, round: w ? w.d.label : "" }; });
-  const out = Object.keys(T.teams).filter(t => isOut(t)).sort((a, b) => (seed[a] || 99) - (seed[b] || 99)).map(t => ({ team: t, owner: T.teams[t].owner }));
-  const slips = Object.keys(T.owners).map(o => ({ o, p: sumProb(T.owners[o].teams, probLatest) })).sort((a, b) => b.p - a.p);
+  const teamIso = t => (T.teams[t] || {}).iso;
+  // --- team-news headlines (today only) from the news scraper ---
+  const nowSec = Math.floor(Date.now() / 1000);
+  const headlines = (((news && news.items) || []).filter(h => h && h.title && (!h.ts || h.ts >= nowSec - 36 * 3600))).slice(0, 3);
+  // --- sweepstake: pot 1-4 leaders (kept) ---
+  const pots = Object.keys(T.pots).map(p => { const w = s.ranked[p][0]; const t = w && w.t; return { pot: p, team: t, owner: t ? s.ownerOf(t) : null, round: w ? w.d.label : "", iso: t ? teamIso(t) : null }; });
+  // --- player slips: biggest 24h movers by combined win probability (with current total) ---
+  const havePrev = Object.keys(probPrev).length > 0;
+  const slipMovers = Object.keys(T.owners).map(o => {
+    const now = sumProb(T.owners[o].teams, probLatest);
+    const was = havePrev ? sumProb(T.owners[o].teams, probPrev) : now;
+    return { o, now, d: (now - was) * 100 };
+  }).sort((a, b) => Math.abs(b.d) - Math.abs(a.d));
+  // --- knocked out: pure teams (with flag iso), strongest first ---
+  const out = Object.keys(T.teams).filter(t => isOut(t)).sort((a, b) => (seed[a] || 99) - (seed[b] || 99)).map(t => ({ team: t, iso: teamIso(t) }));
+  // --- biggest odds movers over the last 24h (with flag + current total chance) ---
   const md = Object.keys(probLatest).filter(t => T.teams[t]).map(t => ({ t, d: (probLatest[t] - (probPrev[t] ?? probLatest[t])) * 100 }));
-  const riser = md.slice().sort((a, b) => b.d - a.d)[0] || null;
-  const faller = md.slice().sort((a, b) => a.d - b.d)[0] || null;
-  return { ...s, pots, out, slips, riser, faller };
+  const dec = x => x ? { ...x, iso: teamIso(x.t), now: probLatest[x.t] ?? 0 } : null;
+  const riser = dec(md.slice().sort((a, b) => b.d - a.d)[0] || null);
+  const faller = dec(md.slice().sort((a, b) => a.d - b.d)[0] || null);
+  const R = results || {};
+  // --- by the numbers: tournament stat leaders ---
+  const ps = R.prizeStats || {};
+  const top = map => { const e = Object.entries(map || {}); if (!e.length) return null; e.sort((a, b) => b[1] - a[1]); return { team: e[0][0], v: e[0][1] }; };
+  const tiles = [];
+  if (ps.fastestGoal) tiles.push({ label: "Fastest goal", team: ps.fastestGoal.team, val: ps.fastestGoal.clock || ps.fastestGoal.minute + "'", iso: teamIso(ps.fastestGoal.team) });
+  const sharp = top(ps.scored); if (sharp) tiles.push({ label: "Sharpest attack", team: sharp.team, val: sharp.v + " scored", iso: teamIso(sharp.team) });
+  const leak = top(ps.conceded); if (leak) tiles.push({ label: "Leakiest defence", team: leak.team, val: leak.v + " conceded", iso: teamIso(leak.team) });
+  const reds = top(ps.redCards); if (reds) tiles.push({ label: "Most red cards", team: reds.team, val: reds.v + (reds.v === 1 ? " red" : " reds"), iso: teamIso(reds.team) });
+  if (tiles.length < 4 && ps.firstOwnGoal) tiles.push({ label: "First own goal", team: ps.firstOwnGoal.team, val: ps.firstOwnGoal.clock || ps.firstOwnGoal.minute + "'", iso: teamIso(ps.firstOwnGoal.team) });
+  return { ...s, pots, slipMovers, out, riser, faller, tiles, headlines };
 }
 
-// draw the shareable digest PNG on a <canvas> — no external libs / no flag images,
-// so it never taints and always exports
-function drawDigest(m) {
-  const C = { bg0: "#0d2c21", bg1: "#06120d", panel: "#10362a", line: "#1f5a44", gold: "#ffd24a", ink: "#f4f7f5", dim: "#9fb3aa", up: "#5fcf8f", down: "#ff6b6b" };
+// preload flag PNGs as CORS-clean images so they can be drawn without tainting the
+// canvas (flagcdn sends Access-Control-Allow-Origin: *). Failed loads are skipped.
+function loadFlags(isos) {
+  const uniq = [...new Set((isos || []).filter(Boolean))];
+  return Promise.all(uniq.map(iso => new Promise(res => {
+    const img = new Image();
+    img.crossOrigin = "anonymous";
+    img.onload = () => res([iso, img]);
+    img.onerror = () => res(null);
+    img.src = `https://flagcdn.com/w40/${iso}.png`;
+  }))).then(pairs => { const m = {}; pairs.forEach(p => { if (p) m[p[0]] = p[1]; }); return m; });
+}
+
+// every flag iso the digest draws (pot leaders, team movers, stat tiles, knocked out)
+function digestFlagIsos(m) {
+  return [...m.pots.map(p => p.iso), m.riser && m.riser.iso, m.faller && m.faller.iso,
+    ...m.tiles.map(t => t.iso), ...m.out.map(o => o.iso)];
+}
+
+// draw the shareable digest PNG on a <canvas>. Flags (if any) are CORS-clean images
+// from loadFlags(), so drawing them keeps the canvas exportable. Each section is a
+// single bordered panel with row dividers for a clean leaderboard look.
+function drawDigest(m, flags) {
+  flags = flags || {};
+  const C = { bg0: "#0e3325", bg1: "#06140e", panel: "#10382b", gold: "#ffd24a", ink: "#f4f7f5", dim: "#9bb1a8", up: "#5fcf8f", down: "#ff6b6b", border: "rgba(255,255,255,.07)", div: "rgba(255,255,255,.06)" };
   const F = s => `${s}px -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif`;
   const ocol = o => (o && T.owners[o] && T.owners[o].color) || "#888";
-  const W = 1080, pad = 56, IW = W - 2 * pad, R = 2, hdr = 50, row = 66, headH = 196, footH = 54;
-  const slips = m.slips.slice(0, 3);
-  const movers = [];
-  if (m.riser && m.riser.d > 0.05) movers.push({ t: m.riser.t, d: m.riser.d, up: true });
-  if (m.faller && m.faller.d < -0.05) movers.push({ t: m.faller.t, d: m.faller.d, up: false });
+  // offscreen text measurement (needed to wrap headlines before the canvas is sized)
+  const mc = document.createElement("canvas").getContext("2d");
+  const measure = (s, sz, wt) => { mc.font = `${wt} ${F(sz)}`; return mc.measureText(String(s)).width; };
+  const wrapLines = (s, maxw, sz, wt) => { const words = String(s).split(/\s+/), lines = []; let cur = ""; words.forEach(w => { const t = cur ? cur + " " + w : w; if (measure(t, sz, wt) <= maxw || !cur) cur = t; else { lines.push(cur); cur = w; } }); if (cur) lines.push(cur); return lines; };
+  const clipM = (s, maxw, sz, wt) => { s = String(s); if (measure(s, sz, wt) <= maxw) return s; let t = s; while (t.length && measure(t + "…", sz, wt) > maxw) t = t.slice(0, -1); return t.trimEnd() + "…"; };
+  const W = 1080, pad = 56, IW = W - 2 * pad, R = 2, headH = 200, hdrH = 46, rowH = 62, secGap = 22, tileH = 96, tileGap = 16;
+  const xL = pad + 28, xR = W - pad - 28;
+  const teamMovers = [];
+  if (m.riser && m.riser.d > 0.05) teamMovers.push({ ...m.riser, up: true });
+  if (m.faller && m.faller.d < -0.05) teamMovers.push({ ...m.faller, up: false });
+  const slipMovers = (m.slipMovers || []).filter(s => Math.abs(s.d) > 0.05).slice(0, 4);
+  const tiles = m.tiles;
+  const tileRows = Math.max(1, Math.ceil(tiles.length / 2));
   const outRows = Math.max(1, Math.ceil(m.out.length / 2));
-  const H = headH + (hdr + m.pots.length * row + 14) + (hdr + slips.length * row + 14) +
-    (hdr + (movers.length || 1) * row + 14) + (hdr + outRows * 44 + 16) + footH;
+
+  // headlines: wrap each to <=2 lines now so we can size the panel
+  const NEWS_MAXW = IW - 100, NEWS_LH = 27;
+  const newsItems = (m.headlines || []).map(h => {
+    let lines = wrapLines(h.title, NEWS_MAXW, 21, 600);
+    if (lines.length > 2) { const rest = lines.slice(1).join(" "); lines = [lines[0], clipM(rest, NEWS_MAXW, 21, 600)]; }
+    return { h, lines };
+  });
+  const newsItemH = it => it.lines.length * NEWS_LH + 52;
+  const newsBody = newsItems.reduce((s, it) => s + newsItemH(it), 0);
+  const newsH = newsItems.length ? hdrH + newsBody + secGap : 0;
+
+  const rowsH = n => hdrH + Math.max(1, n) * rowH + secGap;
+  const tilesH = hdrH + tileRows * tileH + (tileRows - 1) * tileGap + secGap;
+  const knockBody = m.out.length ? (16 + outRows * 42 + 16) : rowH;
+  const knockH = hdrH + knockBody + secGap;
+  const startY = headH + 26;
+  const total = newsH + rowsH(m.pots.length) + rowsH(slipMovers.length) + rowsH(teamMovers.length) + tilesH + knockH;
+  const H = startY + total + 36;
+
   const cv = document.createElement("canvas"); cv.width = W * R; cv.height = H * R;
   const c = cv.getContext("2d"); c.scale(R, R); c.textBaseline = "alphabetic";
-  const rr = (x, y, w, h, r) => { c.beginPath(); c.roundRect(x, y, w, h, r); };
+  const rrp = (x, y, w, h, r) => { c.beginPath(); c.roundRect(x, y, w, h, r); };
   const txt = (s, x, y, sz, wt, col, al) => { c.font = `${wt} ${F(sz)}`; c.fillStyle = col; c.textAlign = al || "left"; c.fillText(String(s), x, y); };
   const dot = (x, y, r, col) => { c.beginPath(); c.arc(x, y, r, 0, 7); c.fillStyle = col; c.fill(); };
   const clip = (s, maxw, wt, sz) => { c.font = `${wt} ${F(sz)}`; s = String(s); if (c.measureText(s).width <= maxw) return s; let t = s; while (t.length && c.measureText(t + "…").width > maxw) t = t.slice(0, -1); return t + "…"; };
-  const card = (yy, h) => { rr(pad, yy, IW, h, 12); c.fillStyle = C.panel; c.fill(); };
+  const panel = (yt, h) => { rrp(pad, yt, IW, h, 16); c.fillStyle = C.panel; c.fill(); c.lineWidth = 1; c.strokeStyle = C.border; rrp(pad + .5, yt + .5, IW - 1, h - 1, 15.5); c.stroke(); };
+  const divider = yy => { c.strokeStyle = C.div; c.lineWidth = 1; c.beginPath(); c.moveTo(pad + 24, yy); c.lineTo(W - pad - 24, yy); c.stroke(); };
+  const avatar = (x, yc, r, o) => { dot(x, yc, r, ocol(o)); txt((o[0] || "").toUpperCase(), x, yc + r * 0.36, r * 1.05, 800, "#08231a", "center"); };
+  // draw a flag centred vertically on yc; returns true if drawn (else caller falls back)
+  const flag = (iso, x, yc, fw, fh) => { const img = iso && flags[iso]; if (!img) return false; const ty = yc - fh / 2; c.save(); rrp(x, ty, fw, fh, 3); c.clip(); c.drawImage(img, x, ty, fw, fh); c.restore(); rrp(x, ty, fw, fh, 3); c.strokeStyle = "rgba(0,0,0,.35)"; c.lineWidth = 1; c.stroke(); return true; };
 
+  // ---- background + header band ----
   let g = c.createLinearGradient(0, 0, 0, H); g.addColorStop(0, C.bg0); g.addColorStop(1, C.bg1); c.fillStyle = g; c.fillRect(0, 0, W, H);
-  g = c.createLinearGradient(0, 0, W, 0); g.addColorStop(0, "rgba(255,210,74,.16)"); g.addColorStop(.6, "rgba(255,210,74,.02)"); c.fillStyle = g; c.fillRect(0, 0, W, headH); c.fillStyle = C.gold; c.fillRect(0, headH - 3, W, 3);
-  txt("WORLD CUP 2026", pad, 88, 50, 800, C.gold);
-  txt("Sweepstake update", pad, 128, 26, 500, C.ink);
-  txt(new Date().toLocaleDateString("en-AU", { weekday: "long", day: "numeric", month: "long", year: "numeric" }), pad, 164, 22, 500, C.dim);
+  g = c.createLinearGradient(0, 0, W, headH); g.addColorStop(0, "rgba(255,210,74,.18)"); g.addColorStop(.65, "rgba(255,210,74,.02)"); c.fillStyle = g; c.fillRect(0, 0, W, headH);
+  c.fillStyle = C.gold; c.fillRect(0, headH - 4, W, 4);
+  txt("WORLD CUP 2026", pad, 92, 52, 800, C.gold);
+  txt("Tournament digest", pad, 132, 26, 500, C.ink);
+  txt(new Date().toLocaleDateString("en-AU", { weekday: "long", day: "numeric", month: "long", year: "numeric" }), pad, 168, 21, 500, C.dim);
 
-  let y = headH + 20;
-  const head = s => { txt(s, pad, y + 8, 23, 800, C.gold); y += hdr; };
+  let y = startY;
+  const head = s => { c.fillStyle = C.gold; rrp(pad, y + 2, 5, 20, 2); c.fill(); txt(s, pad + 16, y + 18, 19, 800, C.gold); y += hdrH; };
+  const empty = msg => { panel(y, rowH); txt(msg, xL, y + rowH / 2 + 6, 20, 500, C.dim); y += rowH + secGap; };
+  const nowSec = Math.floor(Date.now() / 1000);
 
+  // ---- TEAM NEWS · today (scraped headlines) ----
+  if (newsItems.length) {
+    head("TEAM NEWS · today");
+    panel(y, newsBody);
+    let yy = y;
+    newsItems.forEach((it, i) => {
+      if (i) divider(yy);
+      const top = yy + 16;
+      dot(xL, top + 9, 4, C.gold);
+      it.lines.forEach((ln, li) => txt(ln, xL + 22, top + 18 + li * NEWS_LH, 21, 600, C.ink));
+      const meta = (it.h.source || "") + (it.h.ts ? "  ·  " + ago(nowSec - it.h.ts) : "");
+      txt(meta.toUpperCase(), xL + 22, top + 18 + it.lines.length * NEWS_LH + 2, 13, 700, C.dim);
+      yy += newsItemH(it);
+    });
+    y += newsBody + secGap;
+  }
+
+  // ---- POT LEADERS (sweepstake) ----
   head("POT LEADERS · furthest so far");
-  m.pots.forEach((p, i) => {
-    const ry = y + i * row, rh = row - 12; card(ry, rh);
-    txt(p.pot.toUpperCase(), pad + 18, ry + rh / 2 + 7, 15, 700, C.dim);
-    if (p.team) { dot(pad + 110, ry + rh / 2, 7, ocol(p.owner)); txt(clip(p.team + "  ·  " + p.owner, IW - 360, 600, 23), pad + 126, ry + rh / 2 + 8, 23, 600, C.ink); txt(p.round, W - pad - 16, ry + rh / 2 + 7, 18, 600, C.dim, "right"); }
-    else txt("TBD", pad + 110, ry + rh / 2 + 8, 22, 500, C.dim);
-  }); y += m.pots.length * row + 14;
+  { const ph = m.pots.length * rowH; panel(y, ph);
+    m.pots.forEach((p, i) => {
+      const yc = y + i * rowH + rowH / 2; if (i) divider(y + i * rowH);
+      txt(p.pot.toUpperCase(), xL, yc + 5, 14, 800, C.dim);
+      if (p.team) {
+        const drew = flag(p.iso, pad + 100, yc, 30, 20), tx = drew ? pad + 144 : pad + 100;
+        dot(tx + 6, yc, 6, ocol(p.owner));
+        txt(clip(p.team + "  ·  " + p.owner, IW - 380, 600, 22), tx + 20, yc + 6, 22, 600, C.ink);
+        txt(p.round, xR, yc + 5, 17, 600, C.dim, "right");
+      } else txt("TBD", pad + 100, yc + 6, 20, 500, C.dim);
+    });
+    y += ph + secGap;
+  }
 
-  head("MOST FAVOURABLE SLIPS");
-  slips.forEach((s, i) => {
-    const ry = y + i * row, rh = row - 12, col = ocol(s.o); card(ry, rh);
-    txt(i + 1, pad + 24, ry + rh / 2 + 8, 24, 800, i === 0 ? C.gold : C.dim, "center");
-    dot(pad + 74, ry + rh / 2, 18, col); txt((s.o[0] || "").toUpperCase(), pad + 74, ry + rh / 2 + 7, 20, 800, "#08231a", "center");
-    txt(s.o, pad + 108, ry + rh / 2 + 8, 24, 700, C.ink);
-    txt((s.p * 100).toFixed(1) + "%", W - pad - 16, ry + rh / 2 + 9, 28, 800, C.gold, "right");
-  }); y += slips.length * row + 14;
+  // ---- PLAYER SLIPS · biggest 24h moves (sweepstake) ----
+  head("PLAYER SLIPS · biggest 24h moves");
+  if (!slipMovers.length) empty("Slips holding steady — no notable moves.");
+  else { const ph = slipMovers.length * rowH; panel(y, ph);
+    slipMovers.forEach((s, i) => {
+      const yc = y + i * rowH + rowH / 2, up = s.d >= 0, col = up ? C.up : C.down; if (i) divider(y + i * rowH);
+      txt(up ? "▲" : "▼", xL, yc + 7, 18, 800, col);
+      avatar(pad + 80, yc, 15, s.o);
+      txt(s.o, pad + 110, yc + 7, 23, 700, C.ink);
+      txt((s.now * 100).toFixed(1) + "%", xR - 128, yc + 7, 19, 600, C.dim, "right");
+      txt((up ? "+" : "") + s.d.toFixed(1) + "%", xR, yc + 8, 24, 800, col, "right");
+    });
+    y += ph + secGap;
+  }
 
-  head("BIGGEST MOVERS · last 24h");
-  if (!movers.length) { card(y, row - 12); txt("Odds steady — no notable moves.", pad + 18, y + (row - 12) / 2 + 7, 21, 500, C.dim); y += row + 14; }
-  else { movers.forEach((mv, i) => { const ry = y + i * row, rh = row - 12, col = mv.up ? C.up : C.down; card(ry, rh); txt(mv.up ? "▲" : "▼", pad + 22, ry + rh / 2 + 8, 22, 800, col); txt(clip(mv.t, IW - 300, 700, 24), pad + 58, ry + rh / 2 + 8, 24, 700, C.ink); txt((mv.up ? "+" : "") + mv.d.toFixed(1) + "%", W - pad - 16, ry + rh / 2 + 9, 26, 800, col, "right"); }); y += movers.length * row + 14; }
+  // ---- TEAM odds movers ----
+  head("TEAMS · biggest odds moves · 24h");
+  if (!teamMovers.length) empty("Odds steady — no notable moves.");
+  else { const ph = teamMovers.length * rowH; panel(y, ph);
+    teamMovers.forEach((mv, i) => {
+      const yc = y + i * rowH + rowH / 2, col = mv.up ? C.up : C.down; if (i) divider(y + i * rowH);
+      txt(mv.up ? "▲" : "▼", xL, yc + 7, 18, 800, col);
+      const drew = flag(mv.iso, pad + 58, yc, 30, 20), tx = drew ? pad + 102 : pad + 58;
+      txt(clip(mv.t, IW - 380, 700, 23), tx, yc + 7, 23, 700, C.ink);
+      txt((mv.now * 100).toFixed(1) + "%", xR - 128, yc + 7, 19, 600, C.dim, "right");
+      txt((mv.up ? "+" : "") + mv.d.toFixed(1) + "%", xR, yc + 8, 24, 800, col, "right");
+    });
+    y += ph + secGap;
+  }
 
+  // ---- BY THE NUMBERS (stat tiles) ----
+  head("BY THE NUMBERS");
+  { const tw = (IW - tileGap) / 2;
+    tiles.forEach((t, i) => {
+      const cx = pad + (i % 2) * (tw + tileGap), ty = y + Math.floor(i / 2) * (tileH + tileGap), ln = ty + 70;
+      rrp(cx, ty, tw, tileH, 14); c.fillStyle = C.panel; c.fill(); c.lineWidth = 1; c.strokeStyle = C.border; rrp(cx + .5, ty + .5, tw - 1, tileH - 1, 13.5); c.stroke();
+      txt(t.label.toUpperCase(), cx + 24, ty + 34, 13, 800, C.dim);
+      const drew = flag(t.iso, cx + 24, ln - 7, 30, 20), tx = drew ? cx + 66 : cx + 24;
+      txt(clip(t.team, tw - (tx - cx) - 120, 700, 23), tx, ln, 23, 700, C.ink);
+      txt(t.val, cx + tw - 22, ln, 16, 800, C.gold, "right");
+    });
+    y += tileRows * tileH + (tileRows - 1) * tileGap + secGap;
+  }
+
+  // ---- KNOCKED OUT ----
   head("KNOCKED OUT");
-  if (!m.out.length) { card(y, 44); txt("Nobody eliminated yet.", pad + 18, y + 29, 21, 500, C.dim); y += 44 + 16; }
-  else { const colW = IW / 2; m.out.forEach((o, i) => { const cx = pad + (i % 2) * colW, ry = y + Math.floor(i / 2) * 44; dot(cx + 10, ry + 19, 6, ocol(o.owner)); txt(clip(o.team + " · " + o.owner, colW - 56, 500, 21), cx + 26, ry + 26, 21, 500, C.dim); }); y += outRows * 44 + 16; }
+  if (!m.out.length) empty("Nobody eliminated yet.");
+  else { panel(y, knockBody); const colW = IW / 2, fw = 30, fh = 20;
+    m.out.forEach((o, i) => {
+      const cx = pad + 24 + (i % 2) * colW, yc = y + 16 + Math.floor(i / 2) * 42 + 21, img = flags[o.iso];
+      if (img) { c.save(); rrp(cx, yc - fh / 2, fw, fh, 3); c.clip(); c.drawImage(img, cx, yc - fh / 2, fw, fh); c.restore(); rrp(cx, yc - fh / 2, fw, fh, 3); c.strokeStyle = "rgba(0,0,0,.35)"; c.lineWidth = 1; c.stroke(); }
+      else dot(cx + 8, yc, 5, C.dim);
+      txt(clip(o.team, colW - 96, 500, 20), cx + fw + 14, yc + 6, 20, 500, C.dim);
+    });
+    y += knockBody + secGap;
+  }
 
-  txt("Updated " + new Date().toLocaleString("en-AU", { day: "numeric", month: "short", hour: "numeric", minute: "2-digit" }) + " · live at the dashboard", pad, H - 22, 18, 500, C.dim);
+  txt("Updated " + new Date().toLocaleString("en-AU", { day: "numeric", month: "short", hour: "numeric", minute: "2-digit" }) + " · live at the dashboard", pad, H - 26, 17, 500, C.dim);
   return cv;
 }
 
 async function exportSweeps(btn) {
   const reset = btn ? btn.textContent : "";
   const flash = msg => { if (btn) { btn.textContent = msg; setTimeout(() => { btn.textContent = reset; }, 2600); } };
-  drawDigest(digestModel()).toBlob(async blob => {
+  const m = digestModel();
+  const flags = await loadFlags(digestFlagIsos(m));   // CORS-clean so export still works
+  drawDigest(m, flags).toBlob(async blob => {
     if (!blob) return;
     const file = new File([blob], `wc-update-${new Date().toISOString().slice(0, 10)}.png`, { type: "image/png" });
     if (navigator.canShare && navigator.canShare({ files: [file] })) {
-      try { await navigator.share({ files: [file], title: "World Cup sweepstake", text: "Sweepstake update" }); return; }
+      try { await navigator.share({ files: [file], title: "World Cup 2026", text: "World Cup 2026 — tournament digest" }); return; }
       catch (e) { if (e && e.name === "AbortError") return; }
     }
     let copied = false;
@@ -1098,6 +1247,7 @@ async function refresh() {
   try { prev = await getJSON("data/odds_prev.json"); } catch { prev = null; }
   try { fixtures = await getJSON("data/fixtures.json"); } catch { fixtures = []; }
   try { results = await getJSON("data/results.json"); } catch { results = null; }
+  try { news = await getJSON("data/news.json"); } catch { news = null; }
   let hist = null;
   try { hist = await getJSON("data/odds_history.json"); } catch { hist = null; }
   history = (hist && hist.length) ? hist.filter(h => h && h.winner) : [];

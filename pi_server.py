@@ -26,7 +26,7 @@ DATA_DIR = os.environ.get("WC_DATA_DIR", os.path.expanduser("~/wc-data"))
 PORT = int(os.environ.get("WC_PORT", "8090"))
 SECRET = os.environ.get("WEBHOOK_SECRET", "").encode()
 SCRAPE_EVERY = int(os.environ.get("WC_SCRAPE_SECS", "60"))
-SERVE = {"odds_latest.json", "odds_prev.json", "odds_history.json", "fixtures.json", "results.json"}
+SERVE = {"odds_latest.json", "odds_prev.json", "odds_history.json", "fixtures.json", "results.json", "news.json"}
 
 
 def log(*a):
@@ -35,7 +35,7 @@ def log(*a):
 
 def run_scrapers():
     env = {**os.environ, "WC_DATA_DIR": DATA_DIR}
-    for script in ("scrape_snapshot.py", "scrape_results.py"):
+    for script in ("scrape_snapshot.py", "scrape_results.py", "scrape_news.py"):  # scrape_news self-throttles
         try:
             subprocess.run([sys.executable, script], cwd=REPO_DIR, env=env, timeout=120,
                            check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
