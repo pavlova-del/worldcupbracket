@@ -37,7 +37,12 @@ from email.utils import parsedate_to_datetime
 
 DATA_DIR = os.environ.get("WC_DATA_DIR", "docs/data")
 OUT = os.path.join(DATA_DIR, "news.json")
+# tournament.json is a static committed file in docs/data — it is NOT written into
+# WC_DATA_DIR by any scraper, so on the Pi (WC_DATA_DIR=~/wc-data) it lives only in the
+# repo. Prefer WC_DATA_DIR (local/dev), else fall back to the repo's committed copy.
 TOURNAMENT = os.path.join(DATA_DIR, "tournament.json")
+if not os.path.exists(TOURNAMENT):
+    TOURNAMENT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "docs", "data", "tournament.json")
 REFRESH_EVERY = int(os.environ.get("WC_NEWS_EVERY", "1800"))   # seconds between real fetches
 NEWS_MAX_AGE_H = int(os.environ.get("WC_NEWS_MAX_AGE_H", "36"))
 KEEP = int(os.environ.get("WC_NEWS_KEEP", "5"))                 # store a few; digest shows 3

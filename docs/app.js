@@ -601,8 +601,8 @@ function digestModel() {
   // --- team-news headlines (today only) from the news scraper ---
   const nowSec = Math.floor(Date.now() / 1000);
   const headlines = (((news && news.items) || []).filter(h => h && h.title && (!h.ts || h.ts >= nowSec - 36 * 3600))).slice(0, 3);
-  // --- sweepstake: pot 1-4 leaders (kept) ---
-  const pots = Object.keys(T.pots).map(p => { const w = s.ranked[p][0]; const t = w && w.t; return { pot: p, team: t, owner: t ? s.ownerOf(t) : null, round: w ? w.d.label : "", iso: t ? teamIso(t) : null }; });
+  // --- sweepstake: pot 2-4 leaders (Pot 1 excluded — the favourites are a given) ---
+  const pots = Object.keys(T.pots).filter(p => p !== "Pot 1").map(p => { const w = s.ranked[p][0]; const t = w && w.t; return { pot: p, team: t, owner: t ? s.ownerOf(t) : null, round: w ? w.d.label : "", iso: t ? teamIso(t) : null }; });
   // --- player slips: biggest 24h movers by combined win probability (with current total) ---
   const havePrev = Object.keys(probPrev).length > 0;
   const slipMovers = Object.keys(T.owners).map(o => {
@@ -617,17 +617,7 @@ function digestModel() {
   const dec = x => x ? { ...x, iso: teamIso(x.t), now: probLatest[x.t] ?? 0 } : null;
   const riser = dec(md.slice().sort((a, b) => b.d - a.d)[0] || null);
   const faller = dec(md.slice().sort((a, b) => a.d - b.d)[0] || null);
-  const R = results || {};
-  // --- by the numbers: tournament stat leaders ---
-  const ps = R.prizeStats || {};
-  const top = map => { const e = Object.entries(map || {}); if (!e.length) return null; e.sort((a, b) => b[1] - a[1]); return { team: e[0][0], v: e[0][1] }; };
-  const tiles = [];
-  if (ps.fastestGoal) tiles.push({ label: "Fastest goal", team: ps.fastestGoal.team, val: ps.fastestGoal.clock || ps.fastestGoal.minute + "'", iso: teamIso(ps.fastestGoal.team) });
-  const sharp = top(ps.scored); if (sharp) tiles.push({ label: "Sharpest attack", team: sharp.team, val: sharp.v + " scored", iso: teamIso(sharp.team) });
-  const leak = top(ps.conceded); if (leak) tiles.push({ label: "Leakiest defence", team: leak.team, val: leak.v + " conceded", iso: teamIso(leak.team) });
-  const reds = top(ps.redCards); if (reds) tiles.push({ label: "Most red cards", team: reds.team, val: reds.v + (reds.v === 1 ? " red" : " reds"), iso: teamIso(reds.team) });
-  if (tiles.length < 4 && ps.firstOwnGoal) tiles.push({ label: "First own goal", team: ps.firstOwnGoal.team, val: ps.firstOwnGoal.clock || ps.firstOwnGoal.minute + "'", iso: teamIso(ps.firstOwnGoal.team) });
-  return { ...s, pots, slipMovers, out, riser, faller, tiles, headlines };
+  return { ...s, pots, slipMovers, out, riser, faller, headlines };
 }
 
 // preload flag PNGs as CORS-clean images so they can be drawn without tainting the
@@ -643,10 +633,10 @@ function loadFlags(isos) {
   }))).then(pairs => { const m = {}; pairs.forEach(p => { if (p) m[p[0]] = p[1]; }); return m; });
 }
 
-// every flag iso the digest draws (pot leaders, team movers, stat tiles, knocked out)
+// every flag iso the digest draws (pot leaders, team movers, knocked out)
 function digestFlagIsos(m) {
   return [...m.pots.map(p => p.iso), m.riser && m.riser.iso, m.faller && m.faller.iso,
-    ...m.tiles.map(t => t.iso), ...m.out.map(o => o.iso)];
+    ...m.out.map(o => o.iso)];
 }
 
 // draw the shareable digest PNG on a <canvas>. Flags (if any) are CORS-clean images
@@ -668,8 +658,6 @@ function drawDigest(m, flags) {
   if (m.riser && m.riser.d > 0.05) teamMovers.push({ ...m.riser, up: true });
   if (m.faller && m.faller.d < -0.05) teamMovers.push({ ...m.faller, up: false });
   const slipMovers = (m.slipMovers || []).filter(s => Math.abs(s.d) > 0.05).slice(0, 4);
-  const tiles = m.tiles;
-  const tileRows = Math.max(1, Math.ceil(tiles.length / 2));
   const outRows = Math.max(1, Math.ceil(m.out.length / 2));
 
   // headlines: wrap each to <=2 lines now so we can size the panel
@@ -684,11 +672,10 @@ function drawDigest(m, flags) {
   const newsH = newsItems.length ? hdrH + newsBody + secGap : 0;
 
   const rowsH = n => hdrH + Math.max(1, n) * rowH + secGap;
-  const tilesH = hdrH + tileRows * tileH + (tileRows - 1) * tileGap + secGap;
   const knockBody = m.out.length ? (16 + outRows * 42 + 16) : rowH;
   const knockH = hdrH + knockBody + secGap;
   const startY = headH + 26;
-  const total = newsH + rowsH(m.pots.length) + rowsH(slipMovers.length) + rowsH(teamMovers.length) + tilesH + knockH;
+  const total = newsH + rowsH(m.pots.length) + rowsH(slipMovers.length) + rowsH(teamMovers.length) + knockH;
   const H = startY + total + 36;
 
   const cv = document.createElement("canvas"); cv.width = W * R; cv.height = H * R;
@@ -777,20 +764,6 @@ function drawDigest(m, flags) {
       txt((mv.up ? "+" : "") + mv.d.toFixed(1) + "%", xR, yc + 8, 24, 800, col, "right");
     });
     y += ph + secGap;
-  }
-
-  // ---- BY THE NUMBERS (stat tiles) ----
-  head("BY THE NUMBERS");
-  { const tw = (IW - tileGap) / 2;
-    tiles.forEach((t, i) => {
-      const cx = pad + (i % 2) * (tw + tileGap), ty = y + Math.floor(i / 2) * (tileH + tileGap), ln = ty + 70;
-      rrp(cx, ty, tw, tileH, 14); c.fillStyle = C.panel; c.fill(); c.lineWidth = 1; c.strokeStyle = C.border; rrp(cx + .5, ty + .5, tw - 1, tileH - 1, 13.5); c.stroke();
-      txt(t.label.toUpperCase(), cx + 24, ty + 34, 13, 800, C.dim);
-      const drew = flag(t.iso, cx + 24, ln - 7, 30, 20), tx = drew ? cx + 66 : cx + 24;
-      txt(clip(t.team, tw - (tx - cx) - 120, 700, 23), tx, ln, 23, 700, C.ink);
-      txt(t.val, cx + tw - 22, ln, 16, 800, C.gold, "right");
-    });
-    y += tileRows * tileH + (tileRows - 1) * tileGap + secGap;
   }
 
   // ---- KNOCKED OUT ----
