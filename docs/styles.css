@@ -582,6 +582,8 @@ body.filtering .ltable tr[data-owned="1"] td:last-child {
   #groupsView { grid-template-columns:1fr; }
   .sw-bigs { grid-template-columns:1fr; }   /* stack Winner/Runner-up on phones */
   .sw-pots { grid-template-columns:1fr; }   /* stack pot tables on phones */
+  /* on phones the Share button drops below the hero text instead of overlapping it */
+  .sw-export { position:static; display:block; width:100%; margin-top:12px; padding:11px; font-size:14px; }
   /* bigger touch targets */
   .tab { padding:9px 16px; font-size:15px; }
   .otab { padding:8px 13px; font-size:13px; }

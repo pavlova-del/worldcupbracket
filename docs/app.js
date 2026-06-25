@@ -844,11 +844,11 @@ function renderSweeps() {
     : `<span class="dz-tbd">TBD</span>`;
   // ----- hero -----
   let html = `<div class="sw-hero">` +
-    `<button class="sw-export" type="button">Share update</button>` +
     `<div class="sw-hero-title">Sweepstake Rankings</div>` +
     `<div class="sw-hero-pool"><b>$390</b> prize pool · $200 winner · $70 runner-up · $30 each pot</div>` +
     `<div class="sw-rules"><b>Pot winner</b> = the team that progresses furthest. Ties are broken in order: ` +
-    `Points → Goal difference → Goals scored → Goals conceded → Yellow cards → Red cards.</div></div>`;
+    `Points → Goal difference → Goals scored → Goals conceded → Yellow cards → Red cards.</div>` +
+    `<button class="sw-export" type="button">Share update</button></div>`;
   // ----- Winner / Runner-up hero cards -----
   const bigPrize = (cls, medal, amt, label, team) =>
     `<div class="sw-big ${cls}"${team ? ` style="--c:${colOf(team)}"` : ""}><div class="sw-big-medal">${medal}</div>` +
