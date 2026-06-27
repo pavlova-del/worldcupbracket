@@ -541,6 +541,39 @@ function resolveBracket(matchById) {
   }
   return { slotTeam, matchWinner, prov };
 }
+// fixtures.json carries neither round nor group, so derive a fixture's stage: its
+// knockout round when the pairing matches a resolved bracket slot, otherwise its group.
+// Cross-group pairs the bracket can't resolve yet are still flagged knockout (round TBD).
+const RND_FULL = { R32: "Round of 32", R16: "Round of 16", QF: "Quarter-final", SF: "Semi-final", Final: "Final" };
+const RND_ABBR = { R32: "R32", R16: "R16", QF: "QF", SF: "SF", Final: "Final" };
+function knockoutRoundByPair() {
+  const map = {};
+  if (!(T.knockout && T.knockout.length)) return map;
+  const matchById = {}; T.knockout.forEach(m => matchById[m.id] = m);
+  const { slotTeam } = resolveBracket(matchById);
+  T.knockout.forEach(m => {
+    const h = slotTeam(m.home, `${m.id}-home`), a = slotTeam(m.away, `${m.id}-away`);
+    if (h && a) map[pairKey(h, a)] = m.round;
+  });
+  return map;
+}
+function fixtureStage(a, b, koRound) {
+  koRound = koRound || knockoutRoundByPair();
+  const r = koRound[pairKey(a, b)];
+  if (r) return { ko: true, round: r };
+  const ga = T.teams[a] && T.teams[a].group, gb = T.teams[b] && T.teams[b].group;
+  if (ga && gb && ga !== gb) {
+    // not yet resolvable (e.g. a third-place slot, unassigned until every group is
+    // done) — infer the round from group-slot compatibility. Only R32 slots are
+    // expressed by group (later rounds reference prior winners), so any hit is R32.
+    const fits = (slot, g) => slot.pos === "3" ? (slot.groups || []).includes(g)
+      : ((slot.pos === "W" || slot.pos === "R") && slot.group === g);
+    const mt = (T.knockout || []).find(m =>
+      (fits(m.home, ga) && fits(m.away, gb)) || (fits(m.home, gb) && fits(m.away, ga)));
+    return { ko: true, round: mt ? mt.round : null };
+  }
+  return { ko: false, group: ga || null };
+}
 function line(parent, x, y, w, h, cls) {
   const d = el("div", cls || "kline");
   d.style.left = x + "px"; d.style.top = y + "px"; d.style.width = w + "px"; d.style.height = h + "px";
@@ -972,8 +1005,9 @@ function renderKnockout() {
 /* ---------- schedule / calendar ---------- */
 const DAY_FMT = new Intl.DateTimeFormat("en-AU", { timeZone: "Australia/Brisbane", weekday: "long", day: "numeric", month: "long" });
 const TIME_FMT = new Intl.DateTimeFormat("en-AU", { timeZone: "Australia/Brisbane", hour: "numeric", minute: "2-digit", hour12: true });
-function schedRow(f, now, nextTs) {
-  const grp = T.teams[f.a]?.group;
+function schedRow(f, now, nextTs, koRound) {
+  const st = fixtureStage(f.a, f.b, koRound);
+  const tag = st.ko ? (st.round ? RND_ABBR[st.round] : "KO") : (st.group ? "Grp " + st.group : "");
   const m = getMatch(f.a, f.b);
   const played = m && m.state !== "pre";
   const live = m && m.state === "in";
@@ -991,7 +1025,7 @@ function schedRow(f, now, nextTs) {
     `<span class="schedteam${winA ? " win" : ""}">${seedBadge(f.a)}<img src="${FLAG(T.teams[f.a]?.iso)}">${f.a}${ownerTag(f.a)}</span>` +
     mid +
     `<span class="schedteam${winB ? " win" : ""}">${seedBadge(f.b)}<img src="${FLAG(T.teams[f.b]?.iso)}">${f.b}${ownerTag(f.b)}</span>` +
-    `<span class="schedgrp">${grp ? "Grp " + grp : ""}</span>`;
+    `<span class="schedgrp${st.ko ? " ko" : ""}">${tag}</span>`;
   return row;
 }
 
@@ -1007,6 +1041,7 @@ function renderSchedule() {
 
   const now = Date.now() / 1000;
   const nextTs = (fixtures.find(f => f.ts > now) || {}).ts;
+  const koRound = knockoutRoundByPair();   // resolve once, reuse for every row
 
   let list;
   if (schedMode === "results") {
@@ -1024,7 +1059,7 @@ function renderSchedule() {
   list.forEach(f => {
     const day = DAY_FMT.format(new Date(f.ts * 1000));
     if (day !== lastDay) { v.appendChild(el("div", "schedday", day)); lastDay = day; }
-    v.appendChild(schedRow(f, now, nextTs));
+    v.appendChild(schedRow(f, now, nextTs, koRound));
   });
 }
 
@@ -1168,12 +1203,13 @@ function renderNextMatch() {
   const liveM = Object.values(liveScores).find(m => m.state === "in" && T.teams[m.a] && T.teams[m.b])
     || (results && (results.matches || []).find(m => m.state === "in" && T.teams[m.a] && T.teams[m.b]));
   if (liveM) {
-    const grp = T.teams[liveM.a]?.group;
+    const st = fixtureStage(liveM.a, liveM.b);
+    const stage = st.ko ? (st.round ? RND_FULL[st.round] : "Knockout") : (st.group ? `Group ${st.group}` : "");
     box.classList.add("livebox");
     box.innerHTML =
       `<span class="nmlabel live">LIVE NOW</span>` +
       `<span class="nmvs">${nmTeam(liveM.a)}<span class="score">${liveM.sa}<span class="dash">–</span>${liveM.sb}</span>${nmTeam(liveM.b)}</span>` +
-      `<span class="nmtime">${grp ? `Group ${grp}` : ""}</span>`;
+      `<span class="nmtime">${stage}</span>`;
     return;
   }
   box.classList.remove("livebox");
@@ -1181,11 +1217,12 @@ function renderNextMatch() {
   const now = Date.now() / 1000;
   const nx = fixtures.find(f => f.ts > now);
   if (!nx) { box.innerHTML = "<span class='nmlabel'>⏱ No upcoming matches</span>"; return; }
-  const grp = T.teams[nx.a]?.group;
+  const st = fixtureStage(nx.a, nx.b);
+  const stage = st.ko ? (st.round ? RND_FULL[st.round] : "Knockout") : (st.group ? `Group ${st.group}` : "");
   box.innerHTML =
     `<span class="nmlabel">⏱ NEXT MATCH · in ${fmtCountdown(nx.ts - now)}</span>` +
     `<span class="nmvs">${nmTeam(nx.a)}<span class="vs">v</span>${nmTeam(nx.b)}</span>` +
-    `<span class="nmtime">${AEST.format(new Date(nx.ts * 1000))} AEST${grp ? ` · Group ${grp}` : ""}</span>`;
+    `<span class="nmtime">${AEST.format(new Date(nx.ts * 1000))} AEST${stage ? ` · ${stage}` : ""}</span>`;
 }
 
 function renderStatus() {
