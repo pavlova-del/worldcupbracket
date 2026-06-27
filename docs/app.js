@@ -25,6 +25,7 @@ let selectedOwners = new Set();
 let view = "groups";
 let oddsTab = "teams";
 let moversTab = "teams";   // Teams / Player slips sub-toggle within the Movers tab
+let trendsTab = "players"; // Player slips / Teams sub-toggle within the Trends tab
 let schedMode = "fixtures";
 let nextRefreshAt = 0;
 let shownTeam = {}, shownPlayer = {};   // last-rendered values, to flash on change
@@ -160,6 +161,7 @@ const AEST = new Intl.DateTimeFormat("en-AU", { timeZone: "Australia/Brisbane", 
 
 const $ = sel => document.querySelector(sel);
 const el = (tag, cls, html) => { const e = document.createElement(tag); if (cls) e.className = cls; if (html != null) e.innerHTML = html; return e; };
+const esc = s => String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 
 async function getJSON(path) {
   const name = path.split("/").pop();
@@ -1206,7 +1208,374 @@ function renderMoversView() {
   wireMoversTabs(v);
 }
 function wireMoversTabs(v) {
-  v.querySelectorAll(".mvtab").forEach(b => b.onclick = () => { moversTab = b.dataset.mvtab; renderMoversView(); });
+  v.querySelectorAll(".mvtab[data-mvtab]").forEach(b => b.onclick = () => { moversTab = b.dataset.mvtab; renderMoversView(); });
+}
+
+/* ---------- Trends (full-history odds graph) ---------- */
+// round a % up to a tidy axis maximum
+function niceCeil(x) {
+  if (x <= 0) return 1;
+  for (const s of [1, 2, 5, 10, 15, 20, 25, 30, 40, 50, 60, 75, 100]) if (x <= s) return s;
+  return 100;
+}
+// centred moving average (edge-aware) to take the jitter out of the raw odds
+function smoothVals(vals, win) {
+  const n = vals.length;
+  if (win <= 1 || n < 3) return vals.slice();
+  const half = win >> 1, out = new Array(n);
+  for (let i = 0; i < n; i++) {
+    let s = 0, c = 0;
+    for (let j = Math.max(0, i - half); j <= Math.min(n - 1, i + half); j++) { s += vals[j]; c++; }
+    out[i] = s / c;
+  }
+  return out;
+}
+// monotone-cubic (Fritsch–Carlson) spline path through screen-space points — smooth
+// curves that never overshoot the data (so a line can't dip below 0 between points)
+function splinePath(pts) {
+  const n = pts.length;
+  if (n < 2) return n ? `M${pts[0].x} ${pts[0].y}` : "";
+  if (n === 2) return `M${pts[0].x} ${pts[0].y} L${pts[1].x} ${pts[1].y}`;
+  const dx = [], slope = [];
+  for (let i = 0; i < n - 1; i++) { dx[i] = (pts[i + 1].x - pts[i].x) || 1e-6; slope[i] = (pts[i + 1].y - pts[i].y) / dx[i]; }
+  const m = [slope[0]];
+  for (let i = 1; i < n - 1; i++) {
+    if (slope[i - 1] * slope[i] <= 0) m[i] = 0;
+    else { const w1 = 2 * dx[i] + dx[i - 1], w2 = dx[i] + 2 * dx[i - 1]; m[i] = (w1 + w2) / (w1 / slope[i - 1] + w2 / slope[i]); }
+  }
+  m[n - 1] = slope[n - 2];
+  let d = `M${pts[0].x.toFixed(2)} ${pts[0].y.toFixed(2)}`;
+  for (let i = 0; i < n - 1; i++) {
+    const x1 = pts[i].x + dx[i] / 3, y1 = pts[i].y + m[i] * dx[i] / 3;
+    const x2 = pts[i + 1].x - dx[i] / 3, y2 = pts[i + 1].y - m[i + 1] * dx[i] / 3;
+    d += ` C${x1.toFixed(2)} ${y1.toFixed(2)} ${x2.toFixed(2)} ${y2.toFixed(2)} ${pts[i + 1].x.toFixed(2)} ${pts[i + 1].y.toFixed(2)}`;
+  }
+  return d;
+}
+// line graph of win-probability over the full retained history: one smoothed line per
+// player slip (combined chance of their teams) or per team, toggled by a button. Respects
+// the owner filter (selected lines highlighted, the rest dimmed) and has a hover cursor
+// with on-line dots + a value tooltip. All series share the same snapshot timestamps.
+// significant events = moments the bookmaker actually REPRICED a team (raw decimal odds
+// moved), not the constant renormalisation drift. Magnitude = sum |Δ(1/odds)| across teams,
+// so a real result/elimination spikes it. No fixed cap — a significance threshold + spacing
+// keep the markers readable, so the count grows as more games are played.
+function trendEvents(sepFrac) {
+  const snaps = (history || []).filter(h => h && h.winner).slice();
+  if (latest && latest.winner && (!snaps.length || snaps[snaps.length - 1].ts < latest.timestamp))
+    snaps.push({ ts: latest.timestamp, winner: latest.winner });
+  const n = snaps.length; if (n < 4) return [];
+  const span = (snaps[n - 1].ts - snaps[0].ts) || 1;
+  const cand = [];
+  for (let i = 1; i < n; i++) {
+    const a = snaps[i - 1].winner, b = snaps[i].winner;
+    let mx = 0;                         // biggest single-team reprice this step
+    new Set([...Object.keys(a), ...Object.keys(b)]).forEach(t => {
+      if (!T.teams[t]) return;
+      const d = Math.abs((b[t] ? 1 / b[t] : 0) - (a[t] ? 1 / a[t] : 0));
+      if (d > mx) mx = d;
+    });
+    if (mx > 0) cand.push({ i, ts: snaps[i].ts, tot: mx });
+  }
+  const THRESH = 0.018;                 // a team's implied chance jumped ≥~1.8pp (a real result/upset)
+  const minSep = span * (sepFrac || 0.045);   // keep dots from crowding; wider gap on phones
+  cand.sort((a, b) => b.tot - a.tot);
+  const picked = [];
+  for (const c of cand) {
+    if (c.tot < THRESH || picked.length >= 16) break;
+    if (picked.some(p => Math.abs(p.ts - c.ts) < minSep)) continue;
+    picked.push(c);
+  }
+  // movers shown in the card = the win% change users actually see, over a short window
+  const g = Math.max(2, Math.round(n / 80));
+  picked.forEach(ev => {
+    const i = ev.i, j = Math.max(0, i - g);
+    ev.movers = Object.keys(probSeries).filter(t => T.teams[t]).map(t => {
+      const s = probSeries[t]; return { k: t, d: (((s[i] || {}).v || 0) - ((s[j] || {}).v || 0)) * 100 };
+    }).sort((a, b) => Math.abs(b.d) - Math.abs(a.d)).slice(0, 4);
+    ev.team = ev.movers[0] ? ev.movers[0].k : null;
+  });
+  return picked.sort((a, b) => a.ts - b.ts);
+}
+// correlate an odds swing to the match that most likely caused it: a completed game
+// involving the biggest mover, kicking off within a window before the swing (closest wins).
+function eventMatch(ev) {
+  const ms = (results && results.matches) || [];
+  const inWin = m => { const dt = ev.ts - m.ts; return dt >= -3 * 3600 && dt <= 60 * 3600; };
+  const done = ms.filter(m => m.state !== "pre" && T.teams[m.a] && T.teams[m.b] && inWin(m));
+  if (!done.length) return null;
+  const involving = ev.team ? done.filter(m => m.a === ev.team || m.b === ev.team) : [];
+  const pool = involving.length ? involving : done;
+  pool.sort((a, b) => Math.abs(ev.ts - a.ts) - Math.abs(ev.ts - b.ts));
+  return pool[0];
+}
+// the click-through detail card for an event: the match (score + result/upset) + movers
+function eventCardHTML(ev, m) {
+  const dt = new Date(ev.ts * 1000).toLocaleString("en-AU", { weekday: "short", day: "numeric", month: "short", hour: "numeric", minute: "2-digit" });
+  let h = `<div class="trpop-h">${dt}</div>`;
+  if (m) {
+    const A = T.teams[m.a], B = T.teams[m.b];
+    h += `<div class="trpop-m"><span class="trpop-t">${A ? `<img src="${FLAG(A.iso)}">` : ""}${esc(m.a)}</span>` +
+      `<span class="trpop-sc">${m.sa}<i>–</i>${m.sb}</span>` +
+      `<span class="trpop-t">${esc(m.b)}${B ? `<img src="${FLAG(B.iso)}">` : ""}</span></div>`;
+    const w = m.w || (m.sa === m.sb ? null : (m.sa > m.sb ? m.a : m.b));
+    if (w) {
+      const l = w === m.a ? m.b : m.a;
+      const upset = seed[w] && seed[l] && (seed[w] - seed[l] >= 8);
+      h += `<div class="trpop-note${upset ? " upset" : ""}">${upset ? "⚡ Upset — " : ""}${esc(w)} beat ${esc(l)}</div>`;
+    } else h += `<div class="trpop-note">Draw</div>`;
+  } else {
+    h += `<div class="trpop-note dim">Market moved — no single match pinned</div>`;
+  }
+  h += `<div class="trpop-lbl">Biggest odds moves</div>` + ev.movers.map(mv => {
+    const t = T.teams[mv.k], up = mv.d >= 0;
+    return `<div class="trpop-mv">${t ? `<img src="${FLAG(t.iso)}">` : ""}<span class="trpop-mvn">${esc(mv.k)}</span>` +
+      `<span class="trpop-mvd ${up ? "up" : "down"}">${up ? "▲" : "▼"}${Math.abs(mv.d).toFixed(1)}%</span></div>`;
+  }).join("");
+  return h;
+}
+// greedy vertical de-overlap for the right-edge labels (sets .ly, kept within [top,bottom])
+function spreadY(items, top, bottom, gap) {
+  items.sort((a, b) => a.y - b.y);
+  let prev = top - gap;
+  items.forEach(it => { it.ly = Math.max(it.y, prev + gap); prev = it.ly; });
+  if (items.length && items[items.length - 1].ly > bottom) {
+    let p = bottom + gap;
+    for (let i = items.length - 1; i >= 0; i--) { items[i].ly = Math.min(items[i].ly, p - gap); p = items[i].ly; }
+  }
+  return items;
+}
+// tournament phases (group stage → R32 → … → Final) with their date ranges, derived from
+// the match schedule. Future phases sit beyond "now" so they reveal as the tournament runs.
+function tournamentPhases() {
+  const ms = (results && results.matches) || [];
+  if (!ms.length) return [];
+  const ko = knockoutRoundByPair();
+  const order = ["GROUP", "R32", "R16", "QF", "SF", "Final"];
+  const label = { GROUP: "Group stage", R32: "Round of 32", R16: "Round of 16", QF: "Quarter-finals", SF: "Semi-finals", Final: "Final" };
+  const bounds = {};
+  ms.forEach(m => {
+    if (!T.teams[m.a] || !T.teams[m.b]) return;
+    const st = fixtureStage(m.a, m.b, ko);
+    const key = st.ko ? st.round : "GROUP";
+    if (!key || !(key in label)) return;
+    const b = bounds[key] || (bounds[key] = { start: Infinity, end: -Infinity });
+    if (m.ts < b.start) b.start = m.ts;
+    if (m.ts > b.end) b.end = m.ts;
+  });
+  return order.filter(k => bounds[k]).map(k => ({ key: k, label: label[k], start: bounds[k].start, end: bounds[k].end }));
+}
+function renderTrends() {
+  const v = $("#trendsView"); if (!v) return;
+  const slips = trendsTab !== "teams";
+  const mobile = (window.innerWidth || 1200) < 600;
+  const tabs = `<div class="mvtabs trtabs">` +
+    [["players", "Player slips"], ["teams", "Teams"]].map(([m, l]) =>
+      `<button class="mvtab${(slips ? "players" : "teams") === m ? " active" : ""}" data-trtab="${m}">${l}</button>`).join("") +
+    `</div>`;
+
+  const source = slips ? slipSeries : probSeries;
+  const keys = slips ? Object.keys(T.owners) : Object.keys(source).filter(t => T.teams[t] && (t in probLatest));
+  const n = ((source[keys[0]]) || []).length;
+  const win = Math.min(15, Math.max(3, Math.round(n / 40)) | 1);   // smoothing window (odd)
+  const filtering = selectedOwners.size > 0;
+  let series = keys.map(k => {
+    const pts = (source[k] || []).filter(p => p && isFinite(p.v));
+    if (pts.length < 2) return null;
+    const owner = slips ? k : T.teams[k].owner;
+    const color = (T.owners[owner] && T.owners[owner].color) || "#8aa";
+    const sel = !filtering || selectedOwners.has(owner);
+    const sm = smoothVals(pts.map(p => p.v), win);
+    return { k, owner, color, sel, pts, sm, last: pts[pts.length - 1].v };
+  }).filter(Boolean);
+
+  if (series.length < 1 || !history.length) {
+    v.innerHTML = tabs + `<p class="emptynote">Not enough history yet — the graph needs a few hours of odds snapshots to draw. Check back soon.</p>`;
+    return wireTrendsTabs(v);
+  }
+  series.sort((a, b) => b.last - a.last);
+
+  // teams: fold the long flat tail of also-rans into one shaded "Field" series so the top
+  // movers stay legible. Selected teams are always kept individual.
+  let displayed = series;
+  if (!slips) {
+    const KEEP = mobile ? 8 : 12, keep = new Set(series.slice(0, KEEP).map(s => s.k));
+    if (filtering) series.forEach(s => { if (s.sel) keep.add(s.k); });
+    const kept = series.filter(s => keep.has(s.k)), rest = series.filter(s => !keep.has(s.k));
+    if (rest.length >= 3) {
+      const m = rest[0].sm.length, avg = new Array(m).fill(0), mn = new Array(m).fill(Infinity), mx = new Array(m).fill(-Infinity);
+      rest.forEach(s => s.sm.forEach((vv, i) => { avg[i] += vv; if (vv < mn[i]) mn[i] = vv; if (vv > mx[i]) mx[i] = vv; }));
+      for (let i = 0; i < m; i++) avg[i] /= rest.length;
+      displayed = kept.concat([{ k: `Field · ${rest.length} teams`, color: "#8ea49b", sel: !filtering, sm: avg, mn, mx, pts: rest[0].pts, last: avg[m - 1], isField: true }]);
+    }
+  }
+
+  // ---- scales ---- (smaller viewBox on phones so text/flags render larger)
+  const t0 = series[0].pts[0].ts, t1 = series[0].pts[series[0].pts.length - 1].ts;
+  const vmax = Math.max(...displayed.map(s => Math.max(...s.sm)));
+  const yTop = niceCeil(vmax * 100);                 // axis max, in %
+  const W = mobile ? 470 : 860, H = mobile ? 384 : 426;
+  const M = { l: mobile ? 30 : 40, r: mobile ? (slips ? 78 : 86) : (slips ? 94 : 134), t: mobile ? 14 : 18, b: mobile ? 50 : 56 };
+  const iw = W - M.l - M.r, ih = H - M.t - M.b, baseY = M.t + ih;
+  const X = ts => M.l + iw * (t1 === t0 ? 0.5 : (ts - t0) / (t1 - t0));
+  const Y = pv => M.t + ih * (1 - pv / yTop);
+  displayed.forEach(s => {
+    s.scr = s.pts.map((p, i) => ({ x: X(p.ts), y: Y(s.sm[i] * 100) }));
+    if (s.isField) { s.scrMx = s.mx.map((vv, i) => ({ x: X(s.pts[i].ts), y: Y(vv * 100) })); s.scrMn = s.mn.map((vv, i) => ({ x: X(s.pts[i].ts), y: Y(vv * 100) })); }
+  });
+
+  // ---- gridlines + axis labels ----
+  let grid = "";
+  for (let i = 0; i <= 4; i++) {
+    const pv = yTop * i / 4, yy = Y(pv);
+    grid += `<line class="trgrid${i === 0 ? " base" : ""}" x1="${M.l}" y1="${yy.toFixed(1)}" x2="${W - M.r}" y2="${yy.toFixed(1)}"/>` +
+      `<text class="trlbl" x="${M.l - 7}" y="${(yy + 3.5).toFixed(1)}" text-anchor="end">${pv.toFixed(0)}%</text>`;
+  }
+  const xN = mobile ? 3 : 5;
+  for (let i = 0; i <= xN; i++) {
+    const ts = t0 + (t1 - t0) * i / xN, xx = X(ts);
+    const lab = new Date(ts * 1000).toLocaleDateString("en-AU", { day: "numeric", month: "short" });
+    grid += `<text class="trlbl" x="${xx.toFixed(1)}" y="${(baseY + 16).toFixed(1)}" text-anchor="middle">${lab}</text>`;
+  }
+
+  // ---- tournament-phase band along the bottom (fills in as rounds are played) ----
+  const phases = tournamentPhases();
+  let bandSvg = "";
+  if (phases.length) {
+    const segs = [];
+    if (phases[0].start > t0) segs.push({ label: "Build-up", x0: t0, x1: phases[0].start, pre: true });
+    phases.forEach((p, i) => segs.push({ label: p.label, x0: p.start, x1: i < phases.length - 1 ? phases[i + 1].start : Math.max(p.end, t1) }));
+    const by0 = baseY + 26, bh = 19;
+    segs.forEach(s => {
+      const a = Math.max(t0, s.x0), b = Math.min(t1, s.x1); if (b <= a) return;
+      const xa = X(a), xb = X(b), w = xb - xa, cur = !s.pre && s.x0 <= t1 && s.x1 >= t1;
+      bandSvg += `<rect class="trband${cur ? " cur" : ""}${s.pre ? " pre" : ""}" x="${xa.toFixed(1)}" y="${by0}" width="${w.toFixed(1)}" height="${bh}" rx="4"/>`;
+      if (w > 44) bandSvg += `<text class="trbandl${cur ? " cur" : ""}" x="${((xa + xb) / 2).toFixed(1)}" y="${(by0 + bh / 2).toFixed(1)}" text-anchor="middle" dominant-baseline="central">${esc(s.label)}</text>`;
+    });
+  }
+
+  // ---- significant-event markers (faint line + clickable "notification" dot) ----
+  const events = trendEvents(mobile ? 0.075 : 0.045).filter(e => e.ts >= t0 && e.ts <= t1);
+  const evCards = events.map(e => ({ html: eventCardHTML(e, eventMatch(e)), xPct: X(e.ts) / W * 100 }));
+  const evSvg = events.map((e, i) => {
+    const xn = X(e.ts), x = xn.toFixed(1), bx = (xn + 5).toFixed(1), by = (M.t - 5).toFixed(1);
+    return `<line class="trev" x1="${x}" y1="${M.t}" x2="${x}" y2="${baseY}"/>` +
+      `<g class="trmkg" data-ev="${i}"><circle class="trmkhit" cx="${x}" cy="${M.t}" r="12"/>` +
+      `<circle class="trmk" cx="${x}" cy="${M.t}" r="5"/>` +
+      `<circle class="trmkbadge" cx="${bx}" cy="${by}" r="4"/>` +
+      `<text class="trmkbang" x="${bx}" y="${by}" text-anchor="middle" dominant-baseline="central">!</text>` +
+      `<title>What moved the market — click</title></g>`;
+  }).join("");
+
+  // ---- lines + area/band ----
+  const piece = s => {
+    const d = splinePath(s.scr);
+    if (s.isField) {
+      const band = `${splinePath(s.scrMx)} ${splinePath(s.scrMn.slice().reverse()).replace(/^M/, "L")} Z`;
+      return `<path class="trfield${filtering ? " dim" : ""}" d="${band}" fill="${s.color}"/>` +
+        `<path class="trline field${filtering ? " dim" : ""}" d="${d}" fill="none" stroke="${s.color}"/>`;
+    }
+    const cls = "trline" + (filtering ? (s.sel ? " hot" : " dim") : "");
+    let out = "";
+    if (filtering && s.sel) out += `<path class="trarea" d="${d} L${s.scr[s.scr.length - 1].x.toFixed(2)} ${baseY} L${s.scr[0].x.toFixed(2)} ${baseY} Z" fill="${s.color}"/>`;
+    out += `<path class="${cls}" d="${d}" fill="none" stroke="${s.color}"><title>${esc(s.k)}</title></path>`;
+    const e = s.scr[s.scr.length - 1];
+    out += `<circle class="trend${filtering && !s.sel ? " dim" : ""}" cx="${e.x.toFixed(2)}" cy="${e.y.toFixed(2)}" r="2.6" fill="${s.color}"/>`;
+    return out;
+  };
+  const ordered = displayed.slice().sort((a, b) => (a.sel === b.sel) ? 0 : (a.sel ? 1 : -1));
+
+  // ---- right-edge labels (name/flag + %), de-overlapped. On phones teams show flag+% only
+  // (no room for names); the flag identifies the team. ----
+  const labels = displayed.map(s => {
+    const name = s.isField ? (mobile ? "Field" : s.k)
+      : slips ? s.k
+        : mobile ? "" : (s.k.length > 13 ? s.k.slice(0, 12) + "…" : s.k);
+    return {
+      y: s.scr[s.scr.length - 1].y, color: s.color, sel: s.sel, field: !!s.isField, name,
+      pct: (s.last * 100).toFixed(1) + "%",
+      iso: (!slips && !s.isField && T.teams[s.k]) ? T.teams[s.k].iso : null,
+    };
+  });
+  spreadY(labels, M.t + 4, baseY, mobile ? 15 : 13);
+  const lx = W - M.r + 6, fw = mobile ? 18 : 16, fh = mobile ? 12 : 11;
+  const labSvg = labels.map(L => {
+    const dc = filtering && !L.sel ? " dim" : "";
+    let out = `<line class="trlc${dc}" x1="${(W - M.r).toFixed(1)}" y1="${L.y.toFixed(1)}" x2="${(lx - 3).toFixed(1)}" y2="${L.ly.toFixed(1)}" stroke="${L.color}"/>`;
+    let tx = lx;
+    if (L.iso) { out += `<image href="${FLAG(L.iso)}" x="${lx}" y="${(L.ly - fh / 2).toFixed(1)}" width="${fw}" height="${fh}" preserveAspectRatio="xMidYMid slice"/>`; tx = lx + fw + 4; }
+    const inner = L.name
+      ? `<tspan fill="${L.color}">${esc(L.name)}</tspan> <tspan class="trnlp">${L.pct}</tspan>`
+      : `<tspan fill="${L.color}">${L.pct}</tspan>`;
+    out += `<text class="trnl${dc}${L.field ? " field" : ""}" x="${tx.toFixed(1)}" y="${(L.ly + 3.5).toFixed(1)}">${inner}</text>`;
+    return out;
+  }).join("");
+
+  const svg = `<svg class="trsvg${slips ? "" : " teams"}${mobile ? " m" : ""}" viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMidYMid meet" role="img" aria-label="odds over time">` +
+    grid + bandSvg + evSvg + ordered.map(piece).join("") + labSvg +
+    `<line class="trcursor" x1="0" x2="0" y1="${M.t}" y2="${baseY}" style="display:none"/>` +
+    `<g class="trhd"></g></svg>`;
+
+  const span = ago(t1 - t0).replace(" ago", "");
+  const hint = events.length ? " · tap the gold dots for key swings" : "";
+  const cap = `<div class="mvcap">${slips ? "Combined win-probability of each player's teams" : "Win-probability of each team · coloured by player"} · smoothed · last ${span}${hint}</div>`;
+  v.innerHTML = tabs + cap + `<div class="trchart">${svg}<div class="trtip" style="display:none"></div><div class="trpop" style="display:none"></div></div>`;
+  wireTrendsTabs(v);
+  wireTrendsHover(v, { ser: displayed, X, M, iw, W, slips });
+  wireTrendsEvents(v, evCards, { M, H });
+}
+function wireTrendsEvents(v, cards, dim) {
+  const svg = v.querySelector(".trsvg"), pop = v.querySelector(".trpop");
+  if (!svg || !pop) return;
+  const close = () => { pop.style.display = "none"; svg.querySelectorAll(".trmkg.active").forEach(o => o.classList.remove("active")); };
+  svg.addEventListener("click", close);                 // click empty graph to dismiss
+  pop.addEventListener("click", e => e.stopPropagation());
+  svg.querySelectorAll(".trmkg").forEach(g => g.addEventListener("click", e => {
+    e.stopPropagation();
+    const c = cards[+g.dataset.ev]; if (!c) return;
+    const active = g.classList.contains("active");
+    close();
+    if (active) return;                                  // re-click closes
+    pop.innerHTML = c.html;
+    const right = c.xPct > 56;
+    pop.classList.toggle("right", right);
+    pop.style.left = right ? "auto" : `${c.xPct}%`;
+    pop.style.right = right ? `${(100 - c.xPct)}%` : "auto";
+    pop.style.top = `${(dim.M.t / dim.H * 100).toFixed(1)}%`;
+    pop.style.display = "block";
+    g.classList.add("active");
+  }));
+}
+function wireTrendsTabs(v) {
+  v.querySelectorAll(".mvtab[data-trtab]").forEach(b => b.onclick = () => { trendsTab = b.dataset.trtab; renderTrends(); });
+}
+function wireTrendsHover(v, ctx) {
+  const svg = v.querySelector(".trsvg"), tip = v.querySelector(".trtip"), cursor = v.querySelector(".trcursor"), hd = v.querySelector(".trhd");
+  if (!svg || !ctx.ser.length) return;
+  const n = ctx.ser[0].scr.length;
+  const hide = () => { tip.style.display = "none"; cursor.style.display = "none"; hd.innerHTML = ""; };
+  svg.addEventListener("mouseleave", hide);
+  svg.addEventListener("mousemove", ev => {
+    const r = svg.getBoundingClientRect();
+    const px = (ev.clientX - r.left) / r.width * ctx.W;   // -> svg user units
+    if (px < ctx.M.l || px > ctx.W - ctx.M.r) return hide();
+    let idx = Math.round((px - ctx.M.l) / ctx.iw * (n - 1));
+    idx = Math.max(0, Math.min(n - 1, idx));
+    const ts = ctx.ser[0].pts[idx].ts, cx = ctx.ser[0].scr[idx].x;
+    cursor.setAttribute("x1", cx); cursor.setAttribute("x2", cx); cursor.style.display = "";
+    const rows = ctx.ser.map(s => ({ k: s.k, color: s.color, v: s.sm[idx], y: s.scr[idx].y, sel: s.sel }))
+      .sort((a, b) => b.v - a.v);
+    const show = ctx.slips ? rows : rows.slice(0, 11);
+    hd.innerHTML = show.map(rr => `<circle cx="${cx.toFixed(2)}" cy="${rr.y.toFixed(2)}" r="3" fill="${rr.color}"${selectedOwners.size && !rr.sel ? ' opacity="0.25"' : ""}/>`).join("");
+    const date = new Date(ts * 1000).toLocaleString("en-AU", { day: "numeric", month: "short", hour: "numeric", minute: "2-digit" });
+    tip.innerHTML = `<div class="trtipd">${date}</div>` + show.map(rr =>
+      `<div class="trtipr${selectedOwners.size && !rr.sel ? " dim" : ""}"><span class="trdot" style="background:${rr.color}"></span>` +
+      `<span class="trtipn">${esc(rr.k)}</span><span class="trtipv">${(rr.v * 100).toFixed(1)}%</span></div>`).join("");
+    tip.style.display = "";
+    const leftPct = cx / ctx.W * 100, right = leftPct > 58;
+    tip.style.left = right ? "auto" : `calc(${leftPct}% + 12px)`;
+    tip.style.right = right ? `calc(${(100 - leftPct)}% + 12px)` : "auto";
+  });
 }
 
 /* ---------- next match box ---------- */
@@ -1275,7 +1644,7 @@ function renderFreshness() {
 
 function renderAll() {
   document.body.classList.toggle("filtering", selectedOwners.size > 0);
-  renderOwners(); renderStatus(); renderFreshness(); renderNextMatch(); renderGroups(); renderTable(); renderKnockout(); renderSchedule(); renderOdds(); renderPrizes(); renderSweeps();
+  renderOwners(); renderStatus(); renderFreshness(); renderNextMatch(); renderGroups(); renderTable(); renderKnockout(); renderSchedule(); renderTrends(); renderOdds(); renderPrizes(); renderSweeps();
 }
 
 /* ---------- load + poll ---------- */
@@ -1322,6 +1691,7 @@ function setView() {
   $("#tableView").classList.toggle("hidden", view !== "table");
   $("#knockoutView").classList.toggle("hidden", view !== "knockout");
   $("#scheduleView").classList.toggle("hidden", view !== "schedule");
+  const tv = $("#trendsView"); if (tv) tv.classList.toggle("hidden", view !== "trends");
   const pv = $("#prizesView"); if (pv) pv.classList.toggle("hidden", view !== "prizes");  // ITP only
   const sv = $("#sweepsView"); if (sv) sv.classList.toggle("hidden", view !== "sweeps");  // worldcupbracket only
   document.body.classList.toggle("duff-view", view === "prizes");   // card fits the board (no stretch)
@@ -1460,10 +1830,11 @@ function applyDeepLink() {
   const q = new URLSearchParams(location.search);
   const hv = location.hash.replace("#", "");
   const qv = q.get("view");
-  const views = ["groups", "table", "knockout", "schedule", "prizes", "sweeps"];
+  const views = ["groups", "table", "knockout", "schedule", "trends", "prizes", "sweeps"];
   if (views.includes(qv)) view = qv;
   else if (views.includes(hv)) view = hv;
   if (["players", "movers"].includes(q.get("tab"))) oddsTab = q.get("tab");
+  if (["players", "teams"].includes(q.get("trtab"))) trendsTab = q.get("trtab");
   if (q.get("sched") === "results") schedMode = "results";
   // ?age=<secs> previews the freshness footer (fresh/stale) without waiting
   const ageQ = parseInt(q.get("age"), 10);
