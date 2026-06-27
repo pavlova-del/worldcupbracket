@@ -541,37 +541,47 @@ function resolveBracket(matchById) {
   }
   return { slotTeam, matchWinner, prov };
 }
-// fixtures.json carries neither round nor group, so derive a fixture's stage: its
-// knockout round when the pairing matches a resolved bracket slot, otherwise its group.
-// Cross-group pairs the bracket can't resolve yet are still flagged knockout (round TBD).
+// fixtures.json carries neither round nor group, so derive each fixture's stage. Knockout
+// ties get mapped to a round two ways: the resolved bracket slot (exact), then — for ties
+// the bracket can't pin yet (a third-place slot stays unassigned until every group ends) —
+// kickoff order, since the knockout phase is a fixed cascade.
 const RND_FULL = { R32: "Round of 32", R16: "Round of 16", QF: "Quarter-final", SF: "Semi-final", Final: "Final" };
 const RND_ABBR = { R32: "R32", R16: "R16", QF: "QF", SF: "SF", Final: "Final" };
+const KO_ROUND_SIZES = [["R32", 16], ["R16", 8], ["QF", 4], ["SF", 2], ["Final", 1]];
+// group games are always same-group; a knockout tie is the only way two groups meet
+const isKnockoutMatch = m => {
+  const ga = T.teams[m.a] && T.teams[m.a].group, gb = T.teams[m.b] && T.teams[m.b].group;
+  return !!(ga && gb && ga !== gb);
+};
 function knockoutRoundByPair() {
   const map = {};
   if (!(T.knockout && T.knockout.length)) return map;
+  // 1) exact — resolve each bracket slot to a real team
   const matchById = {}; T.knockout.forEach(m => matchById[m.id] = m);
   const { slotTeam } = resolveBracket(matchById);
   T.knockout.forEach(m => {
     const h = slotTeam(m.home, `${m.id}-home`), a = slotTeam(m.away, `${m.id}-away`);
     if (h && a) map[pairKey(h, a)] = m.round;
   });
+  // 2) fill gaps from the schedule — ESPN lists every known knockout tie, and a tie
+  // only appears once its teams are known. Every R32 tie is set at group-stage end
+  // (before any R16), so the Nth knockout match by kickoff is reliably R32 for N<16,
+  // then R16, QF, SF, Final. Bracket-resolved ties keep their exact round.
+  const ko = ((results && results.matches) || []).filter(isKnockoutMatch).sort((x, y) => x.ts - y.ts);
+  let i = 0;
+  for (const [round, n] of KO_ROUND_SIZES) for (let k = 0; k < n && i < ko.length; k++, i++) {
+    const key = pairKey(ko[i].a, ko[i].b);
+    if (!(key in map)) map[key] = round;
+  }
   return map;
 }
 function fixtureStage(a, b, koRound) {
   koRound = koRound || knockoutRoundByPair();
   const r = koRound[pairKey(a, b)];
   if (r) return { ko: true, round: r };
+  // cross-group but not yet placeable (e.g. listed by Sportsbet before ESPN): knockout, round TBD
   const ga = T.teams[a] && T.teams[a].group, gb = T.teams[b] && T.teams[b].group;
-  if (ga && gb && ga !== gb) {
-    // not yet resolvable (e.g. a third-place slot, unassigned until every group is
-    // done) — infer the round from group-slot compatibility. Only R32 slots are
-    // expressed by group (later rounds reference prior winners), so any hit is R32.
-    const fits = (slot, g) => slot.pos === "3" ? (slot.groups || []).includes(g)
-      : ((slot.pos === "W" || slot.pos === "R") && slot.group === g);
-    const mt = (T.knockout || []).find(m =>
-      (fits(m.home, ga) && fits(m.away, gb)) || (fits(m.home, gb) && fits(m.away, ga)));
-    return { ko: true, round: mt ? mt.round : null };
-  }
+  if (ga && gb && ga !== gb) return { ko: true, round: null };
   return { ko: false, group: ga || null };
 }
 function line(parent, x, y, w, h, cls) {
