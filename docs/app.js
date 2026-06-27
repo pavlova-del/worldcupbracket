@@ -973,12 +973,29 @@ function renderKnockout() {
     if (!team) return { team: null, label: placeholderText(m[side], matchById) };
     return { team, key, prov: prov.has(key) };
   };
+  // the schedule reveals R32 opponents (typically a third-place team) before the bracket
+  // can formally assign them — fill a still-empty slot with the known opponent of the
+  // resolved side, when group-compatible. Shown provisionally; only R32 is schedule-known
+  // this way (later rounds depend on results, which matchWinner already resolves).
+  const koOpp = {};
+  ((results && results.matches) || []).filter(isKnockoutMatch).forEach(g => { koOpp[g.a] = g.b; koOpp[g.b] = g.a; });
+  const slotFits = (slot, team) => {
+    const grp = team && T.teams[team] && T.teams[team].group;
+    if (!grp) return false;
+    if (slot.pos === "3") return (slot.groups || []).includes(grp);
+    if (slot.pos === "W" || slot.pos === "R") return slot.group === grp;
+    return false;
+  };
   T.knockout.forEach(m => {
     const box = el("div", "kbox");
     box.style.left = ROUND_COL[m.round] * COLW + "px";
     box.style.top = ypx(yUnit[m.id]) + "px";
     box.style.width = MATCHW + "px";
     const h = slotFor(m, "home"), a = slotFor(m, "away");
+    if (m.round === "R32") {
+      if (!h.team && slotFits(m.home, koOpp[a.team])) { h.team = koOpp[a.team]; h.prov = true; }
+      if (!a.team && slotFits(m.away, koOpp[h.team])) { a.team = koOpp[h.team]; a.prov = true; }
+    }
     const res = (h.team && a.team) ? getMatch(h.team, a.team) : null;
     const played = res && res.state !== "pre";
     const winner = matchWinner(m.id);
