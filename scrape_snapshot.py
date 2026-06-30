@@ -95,6 +95,42 @@ def main():
         snapshot[key] = prices
 
     os.makedirs(DATA_DIR, exist_ok=True)
+
+    # Guard: Sportsbet sometimes drops the outright "Winner 2026" market entirely (e.g.
+    # at the knockout transition — only "Golden Boot Winner" is left on the outrights
+    # event). Never publish an empty snapshot: that would zero out every team on the
+    # live site. Instead keep serving the last good odds (the freshness footer flips to
+    # "updated Xh ago"), and resume automatically once the market relists.
+    if not snapshot["winner"]:
+        print("! Winner market empty (suspended/removed upstream) — keeping last good odds, not overwriting.")
+        try:
+            cur = json.load(open(LATEST))
+        except Exception:
+            cur = {}
+        if not cur.get("winner"):
+            # odds_latest was already clobbered by an earlier empty run — rebuild it from
+            # the most recent history point that still has winner odds (seed if needed).
+            recent = []
+            for path in (HISTORY, SEED_HISTORY):
+                try:
+                    recent = json.load(open(path))
+                    if any(h.get("winner") for h in recent):
+                        break
+                except Exception:
+                    recent = []
+            good = next((h for h in reversed(recent) if h.get("winner")), None)
+            if good:
+                ts = good["ts"]
+                with open(LATEST, "w") as f:
+                    json.dump({
+                        "timestamp": ts,
+                        "iso_time": dt.datetime.fromtimestamp(ts).astimezone().isoformat(timespec="seconds"),
+                        "event_id": event_id, "winner": good["winner"],
+                        "reach_final": {}, "reach_sf": {}, "reach_qf": {},
+                    }, f, ensure_ascii=False)
+                print(f"  recovered odds_latest from history ({len(good['winner'])} teams @ {dt.datetime.fromtimestamp(ts)}).")
+        return
+
     if os.path.exists(LATEST):
         shutil.copyfile(LATEST, PREV)
     with open(LATEST, "w") as f:
