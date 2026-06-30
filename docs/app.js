@@ -512,6 +512,25 @@ function resolveBracket(matchById) {
     }));
     thirds = assignThirds(slots, q);
   }
+  // Prefer the ACTUAL R32 fixtures (from results.matches) over the brute-forced third-place
+  // assignment — the latter picks a structurally-valid slotting that can differ from the
+  // official draw. Once a real cross-group fixture exists, pin the third-place slot to the
+  // genuine opponent of the (finished) group winner/runner-up it faces.
+  const koOpp = {};
+  ((results && results.matches) || []).forEach(g => {
+    const ga = (T.teams[g.a] || {}).group, gb = (T.teams[g.b] || {}).group;
+    if (ga && gb && ga !== gb) { koOpp[g.a] = g.b; koOpp[g.b] = g.a; }
+  });
+  T.knockout.forEach(m => {
+    if (m.round !== "R32") return;
+    ["home", "away"].forEach(side => {
+      if (m[side].pos !== "3") return;
+      const os = m[side === "home" ? "away" : "home"];
+      const anchor = (os.pos === "W" || os.pos === "R") && done[os.group] && rank[os.group] ? rank[os.group][os.pos === "W" ? 0 : 1] : null;
+      const opp = anchor && koOpp[anchor];
+      if (opp && (m[side].groups || []).includes((T.teams[opp] || {}).group)) thirds[`${m.id}-${side}`] = opp;
+    });
+  });
   // teams clinched into the top 2 are shown provisionally (in their current-rank
   // slot) before the group's last games are played; `prov` flags those fills
   const clinch = {}; Object.keys(groups).forEach(g => clinch[g] = done[g] ? null : groupClinch(groups[g]));
