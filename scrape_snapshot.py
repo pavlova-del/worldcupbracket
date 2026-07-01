@@ -22,10 +22,12 @@ LATEST = os.path.join(DATA_DIR, "odds_latest.json")
 PREV = os.path.join(DATA_DIR, "odds_prev.json")
 FIXTURES = os.path.join(DATA_DIR, "fixtures.json")
 HISTORY = os.path.join(DATA_DIR, "odds_history.json")
+RESULTS = os.path.join(DATA_DIR, "results.json")
 
 # committed seed (Mac-era real snapshots) used to backfill a fresh Pi history
 REPO_DIR = os.path.dirname(os.path.abspath(__file__))
 SEED_HISTORY = os.path.join(REPO_DIR, "docs", "data", "odds_history.json")
+TOURNAMENT = os.path.join(REPO_DIR, "docs", "data", "tournament.json")
 HISTORY_RETAIN_DAYS = 45      # keep the whole tournament so drift stays visible
 HISTORY_BUCKET_SECS = 3600    # downsample to ~1 odds point per hour (bounds size)
 
@@ -74,6 +76,52 @@ def downsample(hist, now):
     return [buckets[k] for k in sorted(buckets)]
 
 
+def model_winner():
+    """Fallback when Sportsbet drops the outright Winner market: model each surviving
+    team's championship chance from the bracket + live per-match Win-Draw-Win odds.
+    Returns {team: decimal_odds} or {} if it can't be built."""
+    try:
+        import model_odds
+        with open(TOURNAMENT) as f:
+            tournament = json.load(f)
+        try:
+            with open(RESULTS) as f:
+                results = json.load(f)
+        except Exception:
+            results = {}
+        match_odds = []
+        events = sb.fetch(COMP_EVENTS_API, as_json=True)
+        for e in (events if isinstance(events, list) else []):
+            name = e.get("name") or ""
+            if " v " not in name:
+                continue
+            try:
+                mk = sb.fetch(sb.MARKETS_API.format(event_id=e.get("id")), as_json=True)
+            except Exception:
+                continue
+            wdw = next((m for m in mk if m.get("name") == "Win-Draw-Win"), None) if isinstance(mk, list) else None
+            if not wdw:
+                continue
+            px = {s.get("name"): (s.get("price") or {}).get("winPrice") for s in wdw.get("selections", [])}
+            a, b = name.split(" v ", 1)
+            match_odds.append({"a": a, "b": b, "oA": px.get(a), "oD": px.get("Draw"), "oB": px.get(b)})
+        # team strength from the most recent REAL (non-modelled) outright snapshot
+        strength = {}
+        for path in (HISTORY, SEED_HISTORY):
+            try:
+                h = json.load(open(path))
+            except Exception:
+                continue
+            good = next((e for e in reversed(h) if e.get("winner") and not e.get("modelled")), None)
+            if good:
+                strength = good["winner"]
+                break
+        return model_odds.champion_odds(tournament, results, match_odds, strength)
+    except Exception as exc:
+        print(f"  ! model_winner failed: {exc}")
+        return {}
+
+
 def main():
     event_id = sb.discover_event_id()
     markets = sb.fetch(sb.MARKETS_API.format(event_id=event_id), as_json=True)
@@ -96,40 +144,44 @@ def main():
 
     os.makedirs(DATA_DIR, exist_ok=True)
 
-    # Guard: Sportsbet sometimes drops the outright "Winner 2026" market entirely (e.g.
-    # at the knockout transition — only "Golden Boot Winner" is left on the outrights
-    # event). Never publish an empty snapshot: that would zero out every team on the
-    # live site. Instead keep serving the last good odds (the freshness footer flips to
-    # "updated Xh ago"), and resume automatically once the market relists.
+    # Sportsbet sometimes drops the outright "Winner 2026" market (e.g. at the knockout
+    # transition — only "Golden Boot Winner" remains). Rather than publish zeros, model
+    # each surviving team's championship chance from the bracket + live match odds, and
+    # flag it so the frontend can label it. Resumes the real market the moment it relists.
     if not snapshot["winner"]:
-        print("! Winner market empty (suspended/removed upstream) — keeping last good odds, not overwriting.")
-        try:
-            cur = json.load(open(LATEST))
-        except Exception:
-            cur = {}
-        if not cur.get("winner"):
-            # odds_latest was already clobbered by an earlier empty run — rebuild it from
-            # the most recent history point that still has winner odds (seed if needed).
-            recent = []
-            for path in (HISTORY, SEED_HISTORY):
-                try:
-                    recent = json.load(open(path))
-                    if any(h.get("winner") for h in recent):
-                        break
-                except Exception:
-                    recent = []
-            good = next((h for h in reversed(recent) if h.get("winner")), None)
-            if good:
-                ts = good["ts"]
-                with open(LATEST, "w") as f:
-                    json.dump({
-                        "timestamp": ts,
-                        "iso_time": dt.datetime.fromtimestamp(ts).astimezone().isoformat(timespec="seconds"),
-                        "event_id": event_id, "winner": good["winner"],
-                        "reach_final": {}, "reach_sf": {}, "reach_qf": {},
-                    }, f, ensure_ascii=False)
-                print(f"  recovered odds_latest from history ({len(good['winner'])} teams @ {dt.datetime.fromtimestamp(ts)}).")
-        return
+        modelled = model_winner()
+        if modelled:
+            snapshot["winner"] = modelled
+            snapshot["modelled"] = True
+            print(f"! Winner market suspended — modelled {len(modelled)} teams from live match odds + bracket.")
+        else:
+            # can't model — keep the last good odds rather than overwrite with empty
+            print("! Winner market empty and model unavailable — keeping last good odds.")
+            try:
+                cur = json.load(open(LATEST))
+            except Exception:
+                cur = {}
+            if not cur.get("winner"):
+                recent = []
+                for path in (HISTORY, SEED_HISTORY):
+                    try:
+                        recent = json.load(open(path))
+                        if any(h.get("winner") for h in recent):
+                            break
+                    except Exception:
+                        recent = []
+                good = next((h for h in reversed(recent) if h.get("winner")), None)
+                if good:
+                    ts = good["ts"]
+                    with open(LATEST, "w") as f:
+                        json.dump({
+                            "timestamp": ts,
+                            "iso_time": dt.datetime.fromtimestamp(ts).astimezone().isoformat(timespec="seconds"),
+                            "event_id": event_id, "winner": good["winner"],
+                            "reach_final": {}, "reach_sf": {}, "reach_qf": {},
+                        }, f, ensure_ascii=False)
+                    print(f"  recovered odds_latest from history ({len(good['winner'])} teams @ {dt.datetime.fromtimestamp(ts)}).")
+            return
 
     if os.path.exists(LATEST):
         shutil.copyfile(LATEST, PREV)
@@ -152,13 +204,17 @@ def main():
                 hist = json.load(f) + hist
         except Exception:
             pass
-    hist.append({"ts": snapshot["timestamp"], "winner": snapshot["winner"]})
+    entry = {"ts": snapshot["timestamp"], "winner": snapshot["winner"]}
+    if snapshot.get("modelled"):
+        entry["modelled"] = True
+    hist.append(entry)
     hist = downsample(hist, snapshot["timestamp"])
     with open(HISTORY, "w") as f:
         json.dump(hist, f, ensure_ascii=False)
 
     n = len(snapshot["winner"])
-    print(f"Wrote {LATEST} @ {snapshot['iso_time']} — {n} teams priced "
+    print(f"Wrote {LATEST} @ {snapshot['iso_time']} — {n} teams priced"
+          f"{' (MODELLED)' if snapshot.get('modelled') else ''} "
           f"(reach_final={len(snapshot['reach_final'])}, "
           f"reach_sf={len(snapshot['reach_sf'])}, reach_qf={len(snapshot['reach_qf'])})")
     if os.path.exists(PREV):
