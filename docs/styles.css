@@ -618,6 +618,8 @@ main { display:flex; flex:1; gap:14px; padding:14px 20px 20px; min-height:0; }
 .datafoot .fdot { width:6px; height:6px; border-radius:50%; background:var(--up); flex:none; opacity:.8; }
 .datafoot.stale { color:var(--gold); opacity:.9; }
 .datafoot.stale .fdot { background:var(--gold); animation:freshpulse 1.8s ease-in-out infinite; }
+.datafoot.modelled { color:var(--gold); opacity:.95; }
+.datafoot.modelled .fdot { background:var(--gold); }
 .datafoot.offline { color:var(--down); opacity:.9; }
 .datafoot.offline .fdot { background:var(--down); }
 @keyframes freshpulse { 0%,100%{ opacity:.4; } 50%{ opacity:1; } }

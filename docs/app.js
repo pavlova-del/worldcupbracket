@@ -512,14 +512,19 @@ function resolveBracket(matchById) {
     }));
     thirds = assignThirds(slots, q);
   }
-  // Prefer the ACTUAL R32 fixtures (from results.matches) over the brute-forced third-place
-  // assignment — the latter picks a structurally-valid slotting that can differ from the
-  // official draw. Once a real cross-group fixture exists, pin the third-place slot to the
-  // genuine opponent of the (finished) group winner/runner-up it faces.
+  // Pin third-place slots to the ACTUAL R32 fixtures (from results.matches) rather than the
+  // brute-forced assignThirds guess, which picks a structurally-valid slotting that can differ
+  // from the official draw (and could otherwise duplicate a team). A team's R32 opponent is
+  // its EARLIEST cross-group match (later cross-group games are its R16+ ties), so build the
+  // map from the earliest fixture per team. Trust the real opponent even if its group isn't in
+  // the bracket's precomputed allowed-groups list.
   const koOpp = {};
-  ((results && results.matches) || []).forEach(g => {
+  ((results && results.matches) || []).filter(g => {
     const ga = (T.teams[g.a] || {}).group, gb = (T.teams[g.b] || {}).group;
-    if (ga && gb && ga !== gb) { koOpp[g.a] = g.b; koOpp[g.b] = g.a; }
+    return ga && gb && ga !== gb;
+  }).sort((a, b) => (a.ts || 0) - (b.ts || 0)).forEach(g => {
+    if (!(g.a in koOpp)) koOpp[g.a] = g.b;
+    if (!(g.b in koOpp)) koOpp[g.b] = g.a;
   });
   T.knockout.forEach(m => {
     if (m.round !== "R32") return;
@@ -528,7 +533,7 @@ function resolveBracket(matchById) {
       const os = m[side === "home" ? "away" : "home"];
       const anchor = (os.pos === "W" || os.pos === "R") && done[os.group] && rank[os.group] ? rank[os.group][os.pos === "W" ? 0 : 1] : null;
       const opp = anchor && koOpp[anchor];
-      if (opp && (m[side].groups || []).includes((T.teams[opp] || {}).group)) thirds[`${m.id}-${side}`] = opp;
+      if (opp) thirds[`${m.id}-${side}`] = opp;
     });
   });
   // teams clinched into the top 2 are shown provisionally (in their current-rank
@@ -1651,13 +1656,17 @@ function renderStatus() {
 function renderFreshness() {
   const foot = $("#dataFoot"); if (!foot || !latest) return;
   const offline = DATA_API && !piLive;
+  const modelled = !!latest.modelled;
   const age = ageOverride != null ? ageOverride : Math.max(0, Date.now() / 1000 - (latest.timestamp || 0));
-  const stale = !offline && age > STALE_SECS;
+  const stale = !offline && !modelled && age > STALE_SECS;
   foot.classList.toggle("offline", offline);
   foot.classList.toggle("stale", stale);
+  foot.classList.toggle("modelled", modelled && !offline);
   const txt = offline
     ? `live data offline · showing last snapshot (${ago(age)})`
-    : `odds updated ${ago(age)}`;
+    : modelled
+      ? `winner market suspended · odds modelled from live match prices`
+      : `odds updated ${ago(age)}`;
   foot.innerHTML = `<span class="fdot"></span><span class="ftxt">${txt}</span>`;
 }
 
